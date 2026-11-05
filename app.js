@@ -2,8 +2,8 @@
 /* Kompte mobile : mêmes données que l'application PC, via Supabase.
    Les calculs (échéances, solde) reprennent exactement ceux de kompte.py. */
 
-const SUPABASE_URL = 'https://scwyqwgoihdftvipfhwy.supabase.co';
-const SUPABASE_KEY = 'sb_publishable_vF_QP0y9Vyr4_1kvf88DPw_MMtEfaJk'; // clé publique (protégée par RLS)
+const SUPABASE_URL = 'https://fidtxsobgeadwjgvucho.supabase.co';
+const SUPABASE_KEY = 'sb_publishable_SMR6vAvqlnPqPkxTJxBdiQ_P6KboZZE'; // clé publique (protégée par RLS)
 const POLL_MS = 15000;
 const PAGE = 1000;
 
