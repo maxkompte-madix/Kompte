@@ -536,7 +536,11 @@ function renderTransactions() {
 /** Montants fixes : on peut en ajouter ici ; les modifier reste sur le PC. */
 function renderFixed() {
   const ym = todayIso().slice(0, 7);
-  const groups = [...state.data.fixed_groups].sort((a, b) => b.id - a.id);
+  // Même ordre que sur le PC ; un montant fixe tout neuf arrive en tête.
+  const order = (state.all.kv.fixed_order || {})[state.compte];
+  const rank = new Map((Array.isArray(order) ? order : []).map((id, i) => [id, i]));
+  const place = (g) => (rank.has(g.id) ? rank.get(g.id) : -1);
+  const groups = [...state.data.fixed_groups].sort((a, b) => place(a) - place(b) || b.id - a.id);
   const rows = groups.map((g) => {
     const version = state.data.fixed_versions.filter((v) => v.group_id === g.id && v.start_month <= ym
       && (!v.end_month || v.end_month > ym)).sort((a, b) => (a.start_month < b.start_month ? 1 : -1))[0];
