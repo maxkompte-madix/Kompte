@@ -12,6 +12,7 @@ const TABLES = {
   savings_accounts: ['id', 'id,compte_id,name,opening_cents'],
   items: ['id', 'id,compte_id,title,kind,category,total_cents,first_date,installments,frequency,created_at,vers_compte_id'],
   fixed_groups: ['id', 'id,compte_id,title,category,kind,day_of_month,vers_compte_id'],
+  notes: ['id', 'id,compte_id,title,body,item_id,group_id,created_at,updated_at'],
   fixed_versions: ['id', 'id,group_id,amount_cents,start_month,end_month,day_of_month'],
   fixed_overrides: ['group_id', 'group_id,month,amount_cents'],
   savings_transfers: ['item_id', 'item_id,account_id'],
@@ -295,6 +296,7 @@ function scoped(compte) {
     ...A,
     items,
     fixed_groups: groups,
+    notes: A.notes.filter((r) => r.compte_id === compte),
     savings_accounts: A.savings_accounts.filter((r) => r.compte_id === compte),
     fixed_versions: A.fixed_versions.filter((r) => groupIds.has(r.group_id)),
     fixed_overrides: A.fixed_overrides.filter((r) => groupIds.has(r.group_id)),
@@ -474,9 +476,96 @@ function renderDashboard() {
       ${metric('Déjà dépensé', paid, 'var(--text)')}
       ${metric('Reste prévisionnel', income - out, 'var(--orange)')}
     </div>
+    <button type="button" class="notes-btn" id="notes">Notes${state.data.notes.length ? ` (${state.data.notes.length})` : ''}</button>
     <h2>Dernières opérations</h2>
     <div class="list">${done.map(eventRow).join('') || '<p class="empty">Aucune opération passée ce mois-ci.</p>'}</div>
     ${done.length ? '<p class="note">Toutes les opérations du mois : onglet Transactions.</p>' : ''}`;
+}
+
+// ------------------------------------------------------------------- notes
+function fixedAmount(g) {
+  const ym = todayIso().slice(0, 7);
+  const versions = state.data.fixed_versions.filter((v) => v.group_id === g.id)
+    .sort((a, b) => (a.start_month < b.start_month ? 1 : -1));
+  const version = versions.find((v) => v.start_month <= ym && (!v.end_month || v.end_month > ym)) || versions[0];
+  return version ? version.amount_cents : 0;
+}
+
+/** Ce qu'une note peut accompagner : mêmes règles que note_targets() du PC. */
+function noteTargets() {
+  const items = [...state.data.items].sort((a, b) => (a.first_date < b.first_date ? 1 : a.first_date > b.first_date ? -1 : b.id - a.id));
+  return [
+    ...items.map((r) => ({ key: `i${r.id}`, title: r.title, kind: r.kind, amount: r.total_cents, detail: frDate(r.first_date) })),
+    ...state.data.fixed_groups.map((g) => ({ key: `g${g.id}`, title: g.title, kind: g.kind, amount: fixedAmount(g), detail: 'montant fixe' })),
+  ];
+}
+const noteKey = (n) => (n.item_id !== null ? `i${n.item_id}` : n.group_id !== null ? `g${n.group_id}` : '');
+const signedText = (t) => `${t.kind === 'Revenu' ? '+' : '−'}${euro(t.amount)}`;
+
+function notesSheet() {
+  const notes = [...state.data.notes].sort((a, b) => (a.updated_at < b.updated_at ? 1 : a.updated_at > b.updated_at ? -1 : b.id - a.id));
+  const targets = noteTargets();
+  const rows = notes.map((n) => {
+    const link = targets.find((t) => t.key === noteKey(n));
+    const preview = n.body.split(/\s+/).filter(Boolean).join(' ');
+    // Colonne de droite uniquement pour une note associée : sinon, rien du tout.
+    return `<button type="button" class="row" data-note="${n.id}">
+        <span class="body"><span class="title">${esc(n.title || 'Note sans titre')}</span>
+          ${preview ? `<span class="sub">${esc(preview)}</span>` : ''}</span>
+        ${link ? `<span class="note-link"><span>${esc(link.title)}</span>
+          <span class="amount ${link.kind === 'Revenu' ? 'plus' : 'minus'}">${signedText(link)}</span></span>` : ''}
+      </button>`;
+  }).join('');
+  openSheet(`
+    <h3>Notes</h3>
+    <button type="button" class="primary wide" id="add-note">+ Nouvelle note</button>
+    <div class="list">${rows || '<p class="empty">Aucune note pour ce compte.</p>'}</div>
+    <p class="error-text"></p>
+    <div class="actions"><button type="button" class="secondary" data-close>Fermer</button></div>`, async () => {});
+}
+
+function noteSheet(note) {
+  const key = note ? noteKey(note) : '';
+  const options = noteTargets().map((t) =>
+    `<option value="${t.key}" ${t.key === key ? 'selected' : ''}>${esc(`${t.title} · ${t.detail} · ${signedText(t)}`)}</option>`).join('');
+  openSheet(`
+    <h3>${note ? 'Modifier la note' : 'Nouvelle note'}</h3>
+    <label class="field" for="n-title">Titre</label>
+    <input class="input" id="n-title" autocomplete="off" value="${note ? esc(note.title) : ''}">
+    <label class="field" for="n-body">Texte</label>
+    <textarea class="input" id="n-body" rows="7">${note ? esc(note.body) : ''}</textarea>
+    <label class="field" for="n-link">Associer une transaction ou un montant fixe (facultatif)</label>
+    <select class="input" id="n-link"><option value="">Aucun</option>${options}</select>
+    <p class="error-text"></p>
+    <div class="actions">
+      ${note ? '<button type="button" class="secondary danger" id="n-delete">Supprimer</button>' : ''}
+      <button type="button" class="secondary" data-close>Annuler</button>
+      <button type="submit" class="primary">Enregistrer</button>
+    </div>`, async (form) => {
+    const title = form.querySelector('#n-title').value.trim();
+    const body = form.querySelector('#n-body').value.trim();
+    if (!title && !body) throw new Error('Écris un titre ou un texte.');
+    const link = form.querySelector('#n-link').value;
+    const fields = { title, body, updated_at: utcStamp(),
+                     item_id: link[0] === 'i' ? Number(link.slice(1)) : null,
+                     group_id: link[0] === 'g' ? Number(link.slice(1)) : null };
+    if (note) await check(sb.from('notes').update(fields).eq('id', note.id));
+    else await check(sb.from('notes').insert({ id: newId(), compte_id: state.compte, created_at: fields.updated_at, ...fields }));
+  });
+  const form = $('#sheet-form');
+  const del = form.querySelector('#n-delete');
+  if (del) {
+    del.addEventListener('click', async () => {
+      if (!confirm('Supprimer cette note ?')) return;
+      try {
+        await check(sb.from('notes').delete().eq('id', note.id));
+        closeSheet();
+        await refresh(true);
+      } catch (e) {
+        form.querySelector('.error-text').textContent = e.message;
+      }
+    });
+  }
 }
 
 /** Dépenses qui restent à payer dans le mois (touche sur « Dépenses prévues »). */
@@ -903,6 +992,14 @@ document.addEventListener('click', async (event) => {
   }
   if (t.closest('#balance')) { balanceSheet(); return; }
   if (t.closest('#upcoming')) { upcomingSheet(); return; }
+  if (t.closest('#notes')) { notesSheet(); return; }
+  if (t.closest('#add-note')) { noteSheet(null); return; }
+  const noteRow = t.closest('[data-note]');
+  if (noteRow) {
+    const note = state.data.notes.find((n) => n.id === Number(noteRow.dataset.note));
+    if (note) noteSheet(note);
+    return;
+  }
   if (t.closest('#today')) { state.selected = todayIso().slice(0, 7); render(); return; }
   if (t.closest('#add-fixed')) { fixedSheet(); return; }
   if (t.closest('#password-change')) { passwordSheet(); return; }

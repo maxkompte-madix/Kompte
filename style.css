@@ -156,3 +156,8 @@ label.field { display: block; color: var(--muted); font-size: 13px; margin: 12px
   background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px;
   text-align: center; max-width: 520px; margin: 0 auto;
 }
+
+.notes-btn { display: block; width: 100%; margin-top: 10px; border: 0; border-radius: 12px; padding: 13px; background: var(--card); color: var(--text); font-weight: 700; font-size: 15px; }
+.note-link { flex: 0 0 auto; max-width: 42%; display: flex; flex-direction: column; align-items: flex-end; gap: 2px; font-size: 12px; }
+.note-link > span:first-child { max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+textarea.input { resize: vertical; font: inherit; }
