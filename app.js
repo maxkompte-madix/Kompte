@@ -10,8 +10,8 @@ const PAGE = 1000;
 const TABLES = {
   comptes: ['id', 'id,name'],
   savings_accounts: ['id', 'id,compte_id,name,opening_cents'],
-  items: ['id', 'id,compte_id,title,kind,category,total_cents,first_date,installments,frequency,created_at'],
-  fixed_groups: ['id', 'id,compte_id,title,category,kind,day_of_month'],
+  items: ['id', 'id,compte_id,title,kind,category,total_cents,first_date,installments,frequency,created_at,vers_compte_id'],
+  fixed_groups: ['id', 'id,compte_id,title,category,kind,day_of_month,vers_compte_id'],
   fixed_versions: ['id', 'id,group_id,amount_cents,start_month,end_month,day_of_month'],
   fixed_overrides: ['group_id', 'group_id,month,amount_cents'],
   savings_transfers: ['item_id', 'item_id,account_id'],
@@ -171,7 +171,8 @@ function fixedEvents(start, end) {
         const value = override === null ? v.amount_cents : override;
         if (value > 0) {
           out.push({ row: { id: -g.id, title: g.title, category: g.category, kind: g.kind, frequency: 'Mensuelle',
-                            installments: 1, base_amount: v.amount_cents, override }, due, amount: value });
+                            installments: 1, base_amount: v.amount_cents, override, received: g.received,
+                            compte_id: g.compte_id, vers_compte_id: g.vers_compte_id }, due, amount: value });
         }
       }
       ym = nextMonth(ym);
@@ -282,8 +283,12 @@ async function fetchTable(table) {
 /** Le contenu d'un seul compte : les calculs ci-dessus ne voient que lui. */
 function scoped(compte) {
   const A = state.all;
-  const items = A.items.filter((r) => r.compte_id === compte);
-  const groups = A.fixed_groups.filter((r) => r.compte_id === compte);
+  // Un virement n'est qu'une ligne : reçu ici, il change de sens.
+  const seen = (r) => (r.compte_id === compte ? r
+    : { ...r, received: true, kind: r.kind === 'Revenu' ? 'Dépense' : 'Revenu' });
+  const mine = (r) => r.compte_id === compte || r.vers_compte_id === compte;
+  const items = A.items.filter(mine).map(seen);
+  const groups = A.fixed_groups.filter(mine).map(seen);
   const itemIds = new Set(items.map((r) => r.id));
   const groupIds = new Set(groups.map((r) => r.id));
   return {
@@ -412,9 +417,21 @@ function compteSheet() {
   setTimeout(() => $('#sheet-form').querySelector('#c-name').focus(), 120);
 }
 
+function compteName(id) {
+  const c = state.all.comptes.find((x) => x.id === id);
+  return c ? c.name : '?';
+}
+
+/** « vers X » ou « depuis X » pour un virement entre comptes, sinon vide. */
+function transferNote(r) {
+  if (r.received) return `depuis ${compteName(r.compte_id)}`;
+  return r.vers_compte_id ? `vers ${compteName(r.vers_compte_id)}` : '';
+}
+
 function eventRow(e) {
   const r = e.row;
   let when = frDate(e.due);
+  if (transferNote(r)) when += ` · ${transferNote(r)}`;
   if (r.id < 0) {
     when += ' · fixe';
     if (r.override !== null && r.override !== undefined) when += ' (modifié ce mois)';
@@ -486,6 +503,7 @@ function renderTransactions() {
     const r = e.row;
     const plus = r.kind === 'Revenu';
     let details = `${r.category} · ${frDate(e.due)}`;
+    if (transferNote(r)) details += ` · ${transferNote(r)}`;
     if (r.id < 0) details += ' · fixe';
     else if (r.installments > 1) {
       const index = (+e.due.slice(0, 4) - +r.first_date.slice(0, 4)) * 12 + (+e.due.slice(5, 7) - +r.first_date.slice(5, 7));
@@ -526,7 +544,7 @@ function renderFixed() {
     return `<div class="row">
         ${catIcon(g.category)}
         <span class="body"><span class="title">${esc(g.title)}</span>
-          <span class="sub">${esc(g.category)}${version ? ` · le ${version.day_of_month} du mois` : ''}</span></span>
+          <span class="sub">${esc(g.category)}${transferNote(g) ? ` · ${esc(transferNote(g))}` : ''}${version ? ` · le ${version.day_of_month} du mois` : ''}</span></span>
         ${version ? `<span class="amount ${plus ? 'plus' : 'minus'}">${plus ? '+' : '−'}${euro(version.amount_cents)}</span>`
     : '<span class="sub">Pas actif ce mois-ci</span>'}
       </div>`;
@@ -605,6 +623,26 @@ function accountOptions(selectedId) {
     || '<option value="">Aucun compte</option>';
 }
 
+/** Choix de l'autre compte d'un virement (rien s'il n'y a qu'un compte). */
+function targetField(selectedId) {
+  const others = state.all.comptes.filter((c) => c.id !== state.compte);
+  if (!others.length) return '';
+  return `<label class="field" for="f-target">Virement avec un autre compte</label>
+    <select class="input" id="f-target">
+      <option value="">Aucun</option>
+      ${others.map((c) => `<option value="${c.id}" ${c.id === selectedId ? 'selected' : ''}>${esc(c.name)}</option>`).join('')}
+    </select>
+    <p class="hint">Une dépense ici sera un revenu sur l'autre compte, et inversement.</p>`;
+}
+
+/** Numéro de l'autre compte choisi. Un virement épargne reste sur son compte. */
+function chosenTarget(form, accountId) {
+  const select = form.querySelector('#f-target');
+  const target = select ? Number(select.value) || null : null;
+  if (target !== null && accountId !== null) throw new Error('Un virement épargne ne peut pas aller aussi vers un autre compte.');
+  return target;
+}
+
 /** Boutons Type et Catégorie ; le compte épargne n'apparaît que pour un virement. */
 function wirePickers(form, split = false) {
   const refreshAccount = () => {
@@ -647,6 +685,7 @@ function fixedSheet() {
       <label class="field" for="f-account">Compte épargne destinataire</label>
       <select class="input" id="f-account">${accountOptions(null)}</select>
     </div>
+    ${targetField(null)}
     <label class="field" for="x-day">Jour du mois (1 à 31)</label>
     <input class="input" id="x-day" inputmode="numeric" value="1">
     <label class="field" for="x-start">À partir de</label>
@@ -670,8 +709,9 @@ function fixedSheet() {
       accountId = Number(form.querySelector('#f-account').value) || null;
       if (accountId === null) throw new Error('Crée un compte épargne sur le PC (onglet Épargne) avant de transférer ton épargne.');
     }
+    const target = chosenTarget(form, accountId);
     const groupId = newId();
-    await check(sb.from('fixed_groups').insert({ id: groupId, compte_id: state.compte, title, category: cat, kind, day_of_month: day }));
+    await check(sb.from('fixed_groups').insert({ id: groupId, compte_id: state.compte, vers_compte_id: target, title, category: cat, kind, day_of_month: day }));
     await check(sb.from('fixed_versions').insert({ id: newId(), group_id: groupId, amount_cents: amount,
                                                    start_month: start.slice(0, 7), end_month: null, day_of_month: day }));
     if (accountId !== null) await check(sb.from('fixed_savings_transfers').insert({ group_id: groupId, account_id: accountId }));
@@ -703,6 +743,7 @@ function transactionSheet(item) {
       <label class="field" for="f-account">Compte épargne destinataire</label>
       <select class="input" id="f-account">${accountOptions(transfer ? transfer.account_id : null)}</select>
     </div>
+    ${targetField(editing ? item.vers_compte_id : null)}
     <label class="field" for="f-date">${split ? 'Date du premier paiement' : 'Date'}</label>
     <input class="input" id="f-date" type="date" value="${editing ? item.first_date : todayIso()}">
     ${split ? `<label class="field" for="f-count">Nombre de mensualités</label>
@@ -736,7 +777,8 @@ function transactionSheet(item) {
       accountId = Number(form.querySelector('#f-account').value) || null;
       if (accountId === null) throw new Error('Crée un compte épargne sur le PC (onglet Épargne) avant de transférer ton épargne.');
     }
-    const fields = { title, kind: kindValue, category: catValue, total_cents: total, first_date: due };
+    const fields = { title, kind: kindValue, category: catValue, total_cents: total, first_date: due,
+                     vers_compte_id: chosenTarget(form, accountId) };
     if (editing) {
       await check(sb.from('items').update({ ...fields, installments: n, frequency: item.frequency }).eq('id', item.id));
       await check(sb.from('savings_transfers').delete().eq('item_id', item.id));
@@ -878,6 +920,7 @@ document.addEventListener('click', async (event) => {
     const id = Number(row.dataset.item);
     if (id < 0) { toast('Les montants fixes se modifient sur le PC.'); return; }
     const item = state.data.items.find((i) => i.id === id);
+    if (item && item.received) { toast(`Ce virement se modifie depuis ${compteName(item.compte_id)}.`); return; }
     if (item) transactionSheet(item);
   }
 });
