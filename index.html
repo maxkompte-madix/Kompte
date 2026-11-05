@@ -8,11 +8,12 @@
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" href="icons/app-192.png">
   <link rel="apple-touch-icon" href="icons/app-192.png">
-  <link rel="stylesheet" href="style.css?v=6">
+  <link rel="stylesheet" href="style.css?v=7">
 </head>
 <body>
   <header class="top">
     <div class="brand"><img src="icons/app-192.png" alt=""><span>KOMPTE</span></div>
+    <button id="switch" class="sync compte" type="button" aria-label="Changer de compte" hidden></button>
     <button id="sync" class="sync" type="button" aria-label="Actualiser"></button>
   </header>
   <main id="view"></main>
@@ -20,7 +21,7 @@
     <button type="button" data-tab="dashboard">Tableau de bord</button>
     <button type="button" data-tab="transactions">Transactions</button>
     <button type="button" data-tab="fixed">Fixes</button>
-    <button type="button" data-tab="account">Compte</button>
+    <button type="button" data-tab="account">Réglages</button>
   </nav>
   <button id="fab" class="fab" type="button" aria-label="Nouvelle transaction" hidden>+</button>
   <div id="sheet" class="sheet" hidden>
@@ -29,6 +30,6 @@
   </div>
   <div id="toast" class="toast" hidden></div>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
-  <script src="app.js?v=6"></script>
+  <script src="app.js?v=7"></script>
 </body>
 </html>

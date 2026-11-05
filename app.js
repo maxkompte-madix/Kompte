@@ -8,9 +8,10 @@ const POLL_MS = 15000;
 const PAGE = 1000;
 
 const TABLES = {
-  savings_accounts: ['id', 'id,name,opening_cents'],
-  items: ['id', 'id,title,kind,category,total_cents,first_date,installments,frequency,created_at'],
-  fixed_groups: ['id', 'id,title,category,kind,day_of_month'],
+  comptes: ['id', 'id,name'],
+  savings_accounts: ['id', 'id,compte_id,name,opening_cents'],
+  items: ['id', 'id,compte_id,title,kind,category,total_cents,first_date,installments,frequency,created_at'],
+  fixed_groups: ['id', 'id,compte_id,title,category,kind,day_of_month'],
   fixed_versions: ['id', 'id,group_id,amount_cents,start_month,end_month,day_of_month'],
   fixed_overrides: ['group_id', 'group_id,month,amount_cents'],
   savings_transfers: ['item_id', 'item_id,account_id'],
@@ -30,7 +31,9 @@ const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY, {
 });
 
 const state = {
-  data: null,       // tables + kv (réglages partagés)
+  all: null,        // tables + kv (réglages partagés), tous comptes confondus
+  data: null,       // les mêmes, réduites au compte ouvert
+  compte: null,     // numéro du compte ouvert (null : écran d'accueil)
   version: null,
   tab: 'dashboard',
   selected: todayIso().slice(0, 7),
@@ -219,8 +222,16 @@ function summary(ym) {
 
 const signed = (e) => (e.row.kind === 'Revenu' ? e.amount : -e.amount);
 
+/** Soldes de référence par compte. Avant la v0.14, un seul solde : celui du premier compte. */
+function balances() {
+  const raw = state.all && state.all.kv.balance;
+  if (!raw || typeof raw !== 'object') return {};
+  if ('balance_cents' in raw) return state.all.comptes.length ? { [state.all.comptes[0].id]: raw } : {};
+  return raw;
+}
+
 function balanceReference() {
-  const b = state.data && state.data.kv.balance;
+  const b = balances()[state.compte];
   if (!b || typeof b !== 'object' || !/^\d{4}-\d{2}-\d{2}$/.test(b.as_of || '') || !Number.isInteger(+b.balance_cents)) return null;
   return b;
 }
@@ -268,6 +279,37 @@ async function fetchTable(table) {
   }
 }
 
+/** Le contenu d'un seul compte : les calculs ci-dessus ne voient que lui. */
+function scoped(compte) {
+  const A = state.all;
+  const items = A.items.filter((r) => r.compte_id === compte);
+  const groups = A.fixed_groups.filter((r) => r.compte_id === compte);
+  const itemIds = new Set(items.map((r) => r.id));
+  const groupIds = new Set(groups.map((r) => r.id));
+  return {
+    ...A,
+    items,
+    fixed_groups: groups,
+    savings_accounts: A.savings_accounts.filter((r) => r.compte_id === compte),
+    fixed_versions: A.fixed_versions.filter((r) => groupIds.has(r.group_id)),
+    fixed_overrides: A.fixed_overrides.filter((r) => groupIds.has(r.group_id)),
+    savings_transfers: A.savings_transfers.filter((r) => itemIds.has(r.item_id)),
+  };
+}
+
+function openCompte(compte) {
+  state.compte = compte;
+  if (compte !== null && !state.all.comptes.some((c) => c.id === compte)) state.compte = null;
+  state.data = scoped(state.compte);
+}
+
+function balanceOf(compte) {
+  const [data, current] = [state.data, state.compte];
+  state.data = scoped(compte);
+  state.compte = compte;
+  try { return getBalance(); } finally { state.data = data; state.compte = current; }
+}
+
 async function loadAll() {
   const version = await remoteVersion();
   const names = Object.keys(TABLES);
@@ -276,7 +318,8 @@ async function loadAll() {
   const data = { kv: {} };
   names.forEach((name, i) => { data[name] = tables[i]; });
   for (const r of kvRows) data.kv[r.key] = r.value;
-  state.data = data;
+  state.all = data;
+  openCompte(state.compte);
   state.version = version;
   try { localStorage.setItem('kompte-cache', JSON.stringify({ data, version, email: state.email })); } catch (e) { /* stockage indisponible */ }
 }
@@ -286,7 +329,7 @@ async function refresh(force = false) {
   state.loading = true;
   setSync('Synchronisation…');
   try {
-    if (force || state.data === null || (await remoteVersion()) !== state.version) {
+    if (force || state.all === null || (await remoteVersion()) !== state.version) {
       await loadAll();
       render();
     }
@@ -309,13 +352,64 @@ function setSync(text, error = false) {
 
 // ------------------------------------------------------------- affichage
 function render() {
-  if (!state.data) { view.innerHTML = '<p class="empty">Chargement…</p>'; return; }
+  if (!state.all) { view.innerHTML = '<p class="empty">Chargement…</p>'; return; }
+  const home = state.compte === null;
+  $('#tabs').hidden = home;
+  $('#switch').hidden = home;
+  $('#fab').hidden = true;
+  if (home) { renderHome(); return; }
+  $('#switch').textContent = state.all.comptes.find((c) => c.id === state.compte).name;
   document.querySelectorAll('#tabs button').forEach((b) => b.classList.toggle('active', b.dataset.tab === state.tab));
   $('#fab').hidden = state.tab !== 'dashboard'; // Transactions : lecture seule
   if (state.tab === 'transactions') renderTransactions();
   else if (state.tab === 'fixed') renderFixed();
   else if (state.tab === 'account') renderAccount();
   else renderDashboard();
+}
+
+function renderHome() {
+  const comptes = state.all.comptes;
+  window.scrollTo(0, 0);
+  if (!comptes.length) {
+    view.innerHTML = `
+      <h2>Comptes</h2>
+      <p class="note" style="margin-top:0">Ouvre d'abord Kompte sur le PC et connecte-toi dans Paramètres › Synchronisation :
+        tes données et ton premier compte arriveront ici tout seuls.</p>
+      <div class="actions"><button type="button" class="secondary" id="logout">Se déconnecter</button></div>`;
+    return;
+  }
+  const rows = comptes.map((c) => {
+    const balance = balanceOf(c.id);
+    const value = balance === null ? '' : `<span class="amount ${balance >= 0 ? 'plus' : 'minus'}">${euro(balance)}</span>`;
+    return `<button type="button" class="row" data-compte="${c.id}">
+        <span class="body"><span class="title">${esc(c.name)}</span>
+          ${balance === null ? '<span class="sub">Solde non renseigné</span>' : ''}</span>${value}
+      </button>`;
+  }).join('');
+  view.innerHTML = `
+    <h2>Choisis un compte</h2>
+    <div class="list">${rows}</div>
+    <button type="button" class="primary wide" id="add-compte" style="margin-top:14px">+ Nouveau compte</button>
+    <p class="note">Renommer ou supprimer un compte se fait sur le PC.</p>`;
+}
+
+function compteSheet() {
+  openSheet(`
+    <h3>Nouveau compte</h3>
+    <label class="field" for="c-name">Nom (compte principal, compte commun…)</label>
+    <input class="input" id="c-name" autocomplete="off">
+    <p class="error-text"></p>
+    <div class="actions">
+      <button type="button" class="secondary" data-close>Annuler</button>
+      <button type="submit" class="primary">Enregistrer</button>
+    </div>`, async (form) => {
+    const name = form.querySelector('#c-name').value.trim();
+    if (!name) throw new Error('Le nom est obligatoire.');
+    const same = (c) => c.name.toLocaleLowerCase('fr') === name.toLocaleLowerCase('fr');
+    if (state.all.comptes.some(same)) throw new Error('Un compte porte déjà ce nom.');
+    await check(sb.from('comptes').insert({ id: newId(), name }));
+  });
+  setTimeout(() => $('#sheet-form').querySelector('#c-name').focus(), 120);
 }
 
 function eventRow(e) {
@@ -446,7 +540,7 @@ function renderFixed() {
 
 function renderAccount() {
   view.innerHTML = `
-    <h2>Compte</h2>
+    <h2>Réglages</h2>
     <p class="note" style="margin-top:0">Connecté avec ${esc(state.email)}.<br>
       Les modifications faites ici apparaissent sur le PC en quelques secondes, et inversement.</p>
     <p class="note">La modification des montants fixes, les comptes épargne et les catégories se font sur le PC ;
@@ -460,6 +554,7 @@ function renderAccount() {
 function renderLogin(message = '') {
   $('#tabs').hidden = true;
   $('#fab').hidden = true;
+  $('#switch').hidden = true;
   setSync('');
   view.innerHTML = `
     <form class="login" id="login" novalidate>
@@ -573,10 +668,10 @@ function fixedSheet() {
     let accountId = null;
     if (isSavings(cat, kind)) {
       accountId = Number(form.querySelector('#f-account').value) || null;
-      if (accountId === null) throw new Error('Crée un compte épargne sur le PC (onglet Comptes) avant de transférer ton épargne.');
+      if (accountId === null) throw new Error('Crée un compte épargne sur le PC (onglet Épargne) avant de transférer ton épargne.');
     }
     const groupId = newId();
-    await check(sb.from('fixed_groups').insert({ id: groupId, title, category: cat, kind, day_of_month: day }));
+    await check(sb.from('fixed_groups').insert({ id: groupId, compte_id: state.compte, title, category: cat, kind, day_of_month: day }));
     await check(sb.from('fixed_versions').insert({ id: newId(), group_id: groupId, amount_cents: amount,
                                                    start_month: start.slice(0, 7), end_month: null, day_of_month: day }));
     if (accountId !== null) await check(sb.from('fixed_savings_transfers').insert({ group_id: groupId, account_id: accountId }));
@@ -639,7 +734,7 @@ function transactionSheet(item) {
     if (isSavings(catValue, kindValue)) {
       if (n > 1) throw new Error('Les virements épargne ne peuvent pas être fractionnés.');
       accountId = Number(form.querySelector('#f-account').value) || null;
-      if (accountId === null) throw new Error('Crée un compte épargne sur le PC (onglet Comptes) avant de transférer ton épargne.');
+      if (accountId === null) throw new Error('Crée un compte épargne sur le PC (onglet Épargne) avant de transférer ton épargne.');
     }
     const fields = { title, kind: kindValue, category: catValue, total_cents: total, first_date: due };
     if (editing) {
@@ -649,7 +744,7 @@ function transactionSheet(item) {
       await check(sb.from('confirmations').delete().eq('item_id', item.id));
     } else {
       const id = newId();
-      await check(sb.from('items').insert({ id, ...fields, installments: 1, frequency: 'Unique', created_at: utcStamp() }));
+      await check(sb.from('items').insert({ id, compte_id: state.compte, ...fields, installments: 1, frequency: 'Unique', created_at: utcStamp() }));
       if (accountId !== null) await check(sb.from('savings_transfers').insert({ item_id: id, account_id: accountId }));
     }
   });
@@ -694,9 +789,8 @@ function balanceSheet() {
     await loadAll(); // photographie à partir des données les plus récentes
     const baseline = {};
     for (const e of occurrences(anchor, addDays(todayIso(), 1))) baseline[`${e.row.id}|${e.due}`] = signed(e);
-    await check(sb.from('kv_settings').upsert(
-      { key: 'balance', value: { balance_cents: amount, as_of: anchor, baseline_events: baseline, version: 3 } },
-      { onConflict: 'user_id,key' }));
+    const value = { ...balances(), [state.compte]: { balance_cents: amount, as_of: anchor, baseline_events: baseline, version: 3 } };
+    await check(sb.from('kv_settings').upsert({ key: 'balance', value }, { onConflict: 'user_id,key' }));
   });
 }
 
@@ -750,6 +844,17 @@ document.addEventListener('click', async (event) => {
   if (tab) { state.tab = tab.dataset.tab; window.scrollTo(0, 0); render(); return; }
   if (t.closest('#fab')) { transactionSheet(null); return; }
   if (t.closest('#sync')) { refresh(true); return; }
+  if (t.closest('#switch')) { openCompte(null); render(); return; }
+  if (t.closest('#add-compte')) { compteSheet(); return; }
+  const compte = t.closest('[data-compte]');
+  if (compte) {
+    openCompte(Number(compte.dataset.compte));
+    state.tab = 'dashboard';
+    state.selected = todayIso().slice(0, 7);
+    state.query = '';
+    render();
+    return;
+  }
   if (t.closest('#balance')) { balanceSheet(); return; }
   if (t.closest('#upcoming')) { upcomingSheet(); return; }
   if (t.closest('#today')) { state.selected = todayIso().slice(0, 7); render(); return; }
@@ -759,7 +864,9 @@ document.addEventListener('click', async (event) => {
     if (!confirm('Se déconnecter de Kompte sur ce téléphone ?')) return;
     await sb.auth.signOut();
     try { localStorage.removeItem('kompte-cache'); } catch (e) { /* rien */ }
+    state.all = null;
     state.data = null;
+    state.compte = null;
     state.email = '';
     renderLogin();
     return;
@@ -812,9 +919,8 @@ document.addEventListener('visibilitychange', () => {
 
 function startApp(session) {
   state.email = session.user.email;
-  $('#tabs').hidden = false;
   render();
-  refresh(state.data === null);
+  refresh(state.all === null);
 }
 
 async function boot() {
@@ -823,7 +929,11 @@ async function boot() {
   if (!data.session) { renderLogin(); return; }
   try {
     const cache = JSON.parse(localStorage.getItem('kompte-cache') || 'null');
-    if (cache && cache.email === data.session.user.email) { state.data = cache.data; state.version = cache.version; }
+    if (cache && cache.email === data.session.user.email && cache.data.comptes) {
+      state.all = cache.data;
+      openCompte(null);
+      state.version = cache.version;
+    }
   } catch (e) { /* cache illisible : on recharge */ }
   startApp(data.session);
 }

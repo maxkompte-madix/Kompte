@@ -1,3 +1,4 @@
+[hidden] { display: none !important; }
 :root {
   --bg: #0b0b0d;
   --panel: #151518;
@@ -33,6 +34,7 @@ button { cursor: pointer; }
   background: rgba(11, 11, 13, .92);
   backdrop-filter: blur(8px);
 }
+.top .compte { margin-left: auto; margin-right: 8px; max-width: 34vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
 .brand { display: flex; align-items: center; gap: 10px; font-weight: 700; letter-spacing: .5px; color: var(--accent); font-size: 19px; }
 .brand img { width: 34px; height: 34px; border-radius: 8px; }
 .sync { border: 0; background: var(--card); color: var(--muted); border-radius: 999px; padding: 6px 12px; font-size: 12px; }
