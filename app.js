@@ -248,6 +248,59 @@ function carryOver(balance) {
   return balance + pendingDebits() - passed;
 }
 
+// ----------------------------------------------- « File ton salaire ! » (= kompte.py)
+/** Jour où la paie est demandée : le début du mois, ou 3 jours après s'il tombe un samedi ou un dimanche. */
+function payReminderDay(first) {
+  const weekday = new Date(`${first}T12:00:00Z`).getUTCDay();
+  return weekday === 0 || weekday === 6 ? addDays(first, 3) : first;
+}
+/** Revenus fixes du compte ouvert versés le jour où commence son mois (la paie), pour ce mois civil. */
+function salaryGroups(month) {
+  const D = state.data, day = monthStart();
+  const out = [];
+  for (const g of D.fixed_groups) {
+    if (g.kind !== 'Revenu' || g.received) continue;
+    const v = D.fixed_versions.filter((x) => x.group_id === g.id && x.start_month <= month && (!x.end_month || x.end_month > month))
+      .sort((a, b) => (a.start_month < b.start_month ? 1 : -1))[0];
+    if (!v || v.day_of_month !== day) continue;
+    const o = D.fixed_overrides.find((x) => x.group_id === g.id && x.month === month);
+    out.push({ group: g, amount: o ? o.amount_cents : v.amount_cents });
+  }
+  return out;
+}
+/** La demande de paie à afficher maintenant, ou null. */
+function payReminder() {
+  const ym = currentMonth();
+  if (((state.all.kv.pay || {})[state.compte]) === ym || state.paySnoozed === `${state.compte}|${ym}`) return null;
+  const first = monthPeriod(ym)[0];
+  if (todayIso() < payReminderDay(first)) return null;
+  const groups = salaryGroups(first.slice(0, 7));
+  return groups.length ? { ym, first, month: first.slice(0, 7), groups } : null;
+}
+function paySheet(reminder) {
+  state.paySnoozed = `${state.compte}|${reminder.ym}`; // « Plus tard » : à la prochaine ouverture
+  openSheet(`
+    <h3>File ton salaire !</h3>
+    <p class="hint" style="text-align:center">Combien as-tu reçu pour ta paie du ${+reminder.first.slice(8, 10)} ${MONTHS[+reminder.first.slice(5, 7) - 1]} ?<br>
+      Le montant remplace celui prévu, pour ce mois seulement.</p>
+    ${reminder.groups.map((x, i) => `<label class="field" for="p-${i}">${esc(x.group.title)} (€)</label>
+      <input class="input big" id="p-${i}" inputmode="decimal" autocomplete="off" value="${amountText(x.amount)}">`).join('')}
+    <p class="error-text"></p>
+    <div class="actions">
+      <button type="button" class="secondary" data-close>Plus tard</button>
+      <button type="submit" class="primary">Valider</button>
+    </div>`, async (form) => {
+    const values = reminder.groups.map((x, i) => [x.group, positiveCents(form.querySelector(`#p-${i}`).value)]);
+    for (const [g, amount] of values) {
+      await check(sb.from('fixed_overrides').upsert({ group_id: g.id, month: reminder.month, amount_cents: amount },
+                                                     { onConflict: 'group_id,month' }));
+    }
+    const value = { ...(state.all.kv.pay || {}), [state.compte]: reminder.ym };
+    await check(sb.from('kv_settings').upsert({ key: 'pay', value }, { onConflict: 'user_id,key' }));
+    state.all.kv.pay = value;
+  });
+}
+
 /** Enregistre le réglage « card » (partagé avec le PC). */
 async function saveCard(value) {
   state.all.kv.card = value;
@@ -696,6 +749,8 @@ function renderDashboard() {
     <h2>Dernières opérations</h2>
     <div class="list">${done.map(eventRow).join('') || '<p class="empty">Aucune opération passée ce mois-ci.</p>'}</div>
     ${done.length ? '<p class="note">Toutes les opérations du mois : onglet Transactions.</p>' : ''}`;
+  const reminder = $('#sheet').hidden ? payReminder() : null;
+  if (reminder) paySheet(reminder);
 }
 
 // ------------------------------------------------------------------- notes
