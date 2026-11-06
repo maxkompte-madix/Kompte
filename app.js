@@ -45,6 +45,7 @@ const state = {
   loading: false,
   syncError: false,
   email: '',
+  checked: false,  // données en ligne lues au moins une fois depuis l'ouverture
 };
 
 const $ = (sel) => document.querySelector(sel);
@@ -270,6 +271,8 @@ function salaryGroups(month) {
 }
 /** La demande de paie à afficher maintenant, ou null. */
 function payReminder() {
+  // Seulement après une actualisation : le cache peut ignorer une paie renseignée sur le PC.
+  if (!state.checked) return null;
   const ym = currentMonth();
   if (((state.all.kv.pay || {})[state.compte]) === ym || state.paySnoozed === `${state.compte}|${ym}`) return null;
   const first = monthPeriod(ym)[0];
@@ -595,11 +598,13 @@ async function refresh(force = false) {
       render();
     }
     state.syncError = false;
+    if (!state.checked) { state.checked = true; if (state.tab === 'dashboard') render(); }
     const now = new Date();
     setSync(`À jour · ${pad(now.getHours())}:${pad(now.getMinutes())}`);
   } catch (e) {
     state.syncError = true;
     setSync('Hors ligne', true);
+    if (!state.checked) { state.checked = true; if (state.all && state.tab === 'dashboard') render(); }
   } finally {
     state.loading = false;
   }
