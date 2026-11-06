@@ -16,6 +16,7 @@ const TABLES = {
   fixed_versions: ['id', 'id,group_id,amount_cents,start_month,end_month,day_of_month'],
   fixed_overrides: ['group_id', 'group_id,month,amount_cents'],
   savings_transfers: ['item_id', 'item_id,account_id'],
+  fixed_savings_transfers: ['group_id', 'group_id,account_id'],
 };
 
 const DEFAULT_COLORS = {
@@ -558,6 +559,7 @@ function scoped(compte) {
     fixed_versions: A.fixed_versions.filter((r) => groupIds.has(r.group_id)),
     fixed_overrides: A.fixed_overrides.filter((r) => groupIds.has(r.group_id)),
     savings_transfers: A.savings_transfers.filter((r) => itemIds.has(r.item_id)),
+    fixed_savings_transfers: (A.fixed_savings_transfers || []).filter((r) => groupIds.has(r.group_id)),
   };
 }
 
@@ -704,7 +706,7 @@ function eventRow(e) {
     if (r.override !== null && r.override !== undefined) when += ' (modifié ce mois)';
   }
   const plus = r.kind === 'Revenu';
-  return `<button type="button" class="row" data-item="${r.id}">
+  return `<button type="button" class="row" data-item="${r.id}" data-due="${e.due}">
       ${catIcon(r.category)}
       <span class="body"><span class="title">${esc(r.title)}</span>
         <span class="sub">${esc(when)} · ${esc(r.category)}</span></span>
@@ -893,7 +895,7 @@ function renderTransactions() {
       const index = (+e.due.slice(0, 4) - +r.first_date.slice(0, 4)) * 12 + (+e.due.slice(5, 7) - +r.first_date.slice(5, 7));
       details += ` · ${index + 1}/${r.installments}`;
     } else if (r.frequency !== 'Unique') details += ` · ${r.frequency.toLowerCase()}`;
-    return `<button type="button" class="row" data-item="${r.id}">
+    return `<button type="button" class="row" data-item="${r.id}" data-due="${e.due}">
         ${catIcon(r.category)}
         <span class="body"><span class="title">${esc(r.title)}</span><span class="sub">${esc(details)}</span></span>
         <span class="amount ${plus ? 'plus' : 'minus'}">${plus ? '+' : '−'}${euro(e.amount)}</span>
@@ -923,7 +925,7 @@ function renderTransactions() {
     <div class="list">${rows || `<p class="empty">${state.query || chosen.length ? 'Aucune opération trouvée.' : 'Aucune opération ce mois-ci.'}</p>`}</div>`;
 }
 
-/** Montants fixes : on peut en ajouter ici ; les modifier reste sur le PC. */
+/** Montants fixes : toucher une ligne pour la modifier, changer un seul mois, l'arrêter ou la supprimer. */
 function renderFixed() {
   const ym = todayIso().slice(0, 7);
   // Même ordre que sur le PC ; un montant fixe tout neuf arrive en tête.
@@ -935,19 +937,19 @@ function renderFixed() {
     const version = state.data.fixed_versions.filter((v) => v.group_id === g.id && v.start_month <= ym
       && (!v.end_month || v.end_month > ym)).sort((a, b) => (a.start_month < b.start_month ? 1 : -1))[0];
     const plus = g.kind === 'Revenu';
-    return `<div class="row">
+    return `<button type="button" class="row" data-fixed="${g.id}">
         ${catIcon(g.category)}
         <span class="body"><span class="title">${esc(g.title)}</span>
           <span class="sub">${esc(g.category)}${transferNote(g) ? ` · ${esc(transferNote(g))}` : ''}${version ? ` · le ${version.day_of_month} du mois` : ''}</span></span>
         ${version ? `<span class="amount ${plus ? 'plus' : 'minus'}">${plus ? '+' : '−'}${euro(version.amount_cents)}</span>`
     : '<span class="sub">Pas actif ce mois-ci</span>'}
-      </div>`;
+      </button>`;
   }).join('');
   view.innerHTML = `
     <h2>Montants fixes</h2>
     <button type="button" class="primary wide" id="add-fixed">+ Ajouter un montant fixe</button>
     <div class="list">${rows || '<p class="empty">Aucun montant fixe enregistré.</p>'}</div>
-    <p class="note">Pour modifier ou arrêter un montant fixe, passe par le PC.</p>`;
+    <p class="note">Touche un montant fixe pour le modifier, changer un seul mois ou l'arrêter.</p>`;
 }
 
 function renderAccount() {
@@ -1082,33 +1084,95 @@ function wirePickers(form, split = false) {
   refreshAccount();
 }
 
-function fixedSheet() {
+// --------------------------------------------- montants fixes (mêmes règles que kompte.py)
+function fixedHistory(groupId) {
+  return state.data.fixed_versions.filter((v) => v.group_id === groupId)
+    .sort((a, b) => (a.start_month < b.start_month ? -1 : 1));
+}
+function fixedVersionAt(groupId, ym) {
+  return fixedHistory(groupId).filter((v) => v.start_month <= ym && (!v.end_month || v.end_month > ym)).pop() || null;
+}
+/** Mois de fin si le montant fixe a été arrêté, sinon null. */
+function fixedStoppedSince(groupId) {
+  const rows = fixedHistory(groupId);
+  return rows.length && rows.every((v) => v.end_month) ? rows.map((v) => v.end_month).sort().pop() : null;
+}
+function fixedOverride(groupId, ym) {
+  const o = state.data.fixed_overrides.find((x) => x.group_id === groupId && x.month === ym);
+  return o ? o.amount_cents : null;
+}
+function fixedGroup(id) { return state.data.fixed_groups.find((g) => g.id === id); }
+
+/** Crée ou modifie un montant fixe (= Store.save_fixed) : le nom, le type et la catégorie valent pour tous
+    les mois ; le montant et le jour seulement à partir de « start », et seulement s'ils changent vraiment. */
+async function saveFixed(group, f) {
+  let groupId;
+  if (!group) {
+    groupId = newId();
+    await check(sb.from('fixed_groups').insert({ id: groupId, compte_id: state.compte, vers_compte_id: f.target, title: f.title,
+                                                 category: f.category, kind: f.kind, day_of_month: f.day }));
+    await check(sb.from('fixed_versions').insert({ id: newId(), group_id: groupId, amount_cents: f.amount,
+                                                   start_month: f.start, end_month: null, day_of_month: f.day }));
+  } else {
+    groupId = group.id;
+    await check(sb.from('fixed_groups').update({ title: f.title, category: f.category, kind: f.kind, day_of_month: f.day,
+                                                 vers_compte_id: f.target }).eq('id', groupId));
+    const current = fixedVersionAt(groupId, f.start);
+    const stopped = fixedStoppedSince(groupId);
+    const unchanged = current && current.amount_cents === f.amount && current.day_of_month === f.day
+      && (stopped === null || stopped > f.start);
+    if (!unchanged) {
+      // Nouveau montant à partir de ce mois : les mois d'avant restent intacts.
+      await check(sb.from('fixed_versions').delete().eq('group_id', groupId).gte('start_month', f.start));
+      await check(sb.from('fixed_versions').update({ end_month: f.start }).eq('group_id', groupId).lt('start_month', f.start)
+        .or(`end_month.is.null,end_month.gt.${f.start}`));
+      await check(sb.from('fixed_versions').insert({ id: newId(), group_id: groupId, amount_cents: f.amount,
+                                                     start_month: f.start, end_month: null, day_of_month: f.day }));
+    }
+  }
+  await check(sb.from('fixed_savings_transfers').delete().eq('group_id', groupId));
+  if (f.accountId !== null) await check(sb.from('fixed_savings_transfers').insert({ group_id: groupId, account_id: f.accountId }));
+}
+
+function fixedSheet(group = null) {
   const names = categories().map((c) => c.name);
   const ym = todayIso().slice(0, 7);
+  const current = group ? (fixedVersionAt(group.id, ym) || fixedHistory(group.id).pop() || null) : null;
+  const transfer = group ? state.data.fixed_savings_transfers.find((t) => t.group_id === group.id) : null;
+  const kind = group ? group.kind : 'Dépense';
+  const stopped = group ? fixedStoppedSince(group.id) : null;
   openSheet(`
-    <h3>Nouveau montant fixe</h3>
+    <h3>${group ? 'Modifier le montant fixe' : 'Nouveau montant fixe'}</h3>
+    ${stopped ? `<p class="hint" style="text-align:center">Arrêté depuis ${monthLabel(stopped).toLowerCase()} : enregistrer un montant le relance.</p>` : ''}
     <label class="field" for="x-amount">Montant mensuel (€)</label>
-    <input class="input big" id="x-amount" inputmode="decimal" autocomplete="off">
+    <input class="input big" id="x-amount" inputmode="decimal" autocomplete="off" value="${current ? amountText(current.amount_cents) : ''}">
     <label class="field" for="x-title">Description</label>
-    <input class="input" id="x-title" autocomplete="off">
+    <input class="input" id="x-title" autocomplete="off" value="${group ? esc(group.title) : ''}">
     <label class="field">Type</label>
     <div class="segmented" id="f-kind">
-      <button type="button" data-kind="Dépense" class="on">Dépense</button>
-      <button type="button" data-kind="Revenu">Revenu</button>
+      <button type="button" data-kind="Dépense" class="${kind === 'Dépense' ? 'on' : ''}">Dépense</button>
+      <button type="button" data-kind="Revenu" class="${kind === 'Revenu' ? 'on' : ''}">Revenu</button>
     </div>
     <label class="field">Catégorie</label>
-    ${categoryPicker(names.includes('Factures') ? 'Factures' : names[0])}
+    ${categoryPicker(group ? group.category : (names.includes('Factures') ? 'Factures' : names[0]))}
     <div id="f-account-box" hidden>
       <label class="field" for="f-account">Compte épargne destinataire</label>
-      <select class="input" id="f-account">${accountOptions(null)}</select>
+      <select class="input" id="f-account">${accountOptions(transfer ? transfer.account_id : null)}</select>
     </div>
-    ${targetField(null)}
+    ${targetField(group ? group.vers_compte_id : null)}
     <label class="field" for="x-day">Jour du mois (1 à 31)</label>
-    <input class="input" id="x-day" inputmode="numeric" value="1">
-    <label class="field" for="x-start">À partir de</label>
+    <input class="input" id="x-day" inputmode="numeric" value="${current ? current.day_of_month : 1}">
+    <label class="field" for="x-start">${group ? 'Nouveau montant et jour à partir de' : 'À partir de'}</label>
     <input class="input" id="x-start" type="date" value="${ym}-01">
+    ${group ? `<p class="hint">Le nom, le type et la catégorie valent pour tous les mois. Le montant et le jour changent à partir
+      de cette date : les mois d'avant et les mois modifiés un par un sont conservés.</p>
+      <div class="actions">
+        <button type="button" class="secondary" id="x-month">Un seul mois…</button>
+        <button type="button" class="secondary" id="x-stop">Arrêter…</button>
+      </div>` : ''}
     <p class="error-text"></p>
     <div class="actions">
+      ${group ? '<button type="button" class="secondary danger" id="x-delete">Supprimer</button>' : ''}
       <button type="button" class="secondary" data-close>Annuler</button>
       <button type="submit" class="primary">Enregistrer</button>
     </div>`, async (form) => {
@@ -1119,22 +1183,116 @@ function fixedSheet() {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(start)) throw new Error('Date invalide.');
     const day = Number(form.querySelector('#x-day').value.trim());
     if (!Number.isInteger(day) || day < 1 || day > 31) throw new Error('Jour du mois : entre 1 et 31.');
-    const kind = form.querySelector('#f-kind .on').dataset.kind;
+    const chosenKind = form.querySelector('#f-kind .on').dataset.kind;
     const cat = form.querySelector('#cats .on').dataset.cat;
     let accountId = null;
-    if (isSavings(cat, kind)) {
+    if (isSavings(cat, chosenKind)) {
       accountId = Number(form.querySelector('#f-account').value) || null;
       if (accountId === null) throw new Error('Crée un compte épargne sur le PC (onglet Épargne) avant de transférer ton épargne.');
     }
     const target = chosenTarget(form, accountId);
-    const groupId = newId();
-    await check(sb.from('fixed_groups').insert({ id: groupId, compte_id: state.compte, vers_compte_id: target, title, category: cat, kind, day_of_month: day }));
-    await check(sb.from('fixed_versions').insert({ id: newId(), group_id: groupId, amount_cents: amount,
-                                                   start_month: start.slice(0, 7), end_month: null, day_of_month: day }));
-    if (accountId !== null) await check(sb.from('fixed_savings_transfers').insert({ group_id: groupId, account_id: accountId }));
+    await saveFixed(group, { title, category: cat, kind: chosenKind, amount, start: start.slice(0, 7), day, accountId, target });
   });
-  wirePickers($('#sheet-form'));
-  setTimeout(() => $('#sheet-form').querySelector('#x-amount').focus(), 120);
+  const form = $('#sheet-form');
+  wirePickers(form);
+  if (group) {
+    form.querySelector('#x-month').addEventListener('click', () => fixedMonthSheet(group, ym));
+    form.querySelector('#x-stop').addEventListener('click', () => stopFixedSheet(group));
+    form.querySelector('#x-delete').addEventListener('click', async () => {
+      if (!confirm(`Supprimer « ${group.title} » et TOUT son historique ?\n\nLes mois passés disparaissent aussi et le solde `
+                   + 'est recalculé. Pour ne plus le compter à partir d\'un mois, utilise plutôt « Arrêter ».')) return;
+      try {
+        await check(sb.from('fixed_groups').delete().eq('id', group.id));
+        closeSheet();
+        await refresh(true);
+      } catch (e) {
+        form.querySelector('.error-text').textContent = e.message;
+      }
+    });
+  }
+  setTimeout(() => form.querySelector('#x-amount').focus(), 120);
+}
+
+/** Changer le montant d'un seul mois (= fixed_month_dialog du PC). */
+function fixedMonthSheet(group, ym) {
+  const version = fixedVersionAt(group.id, ym);
+  const override = fixedOverride(group.id, ym);
+  const usual = version ? version.amount_cents : null;
+  const shown = override !== null ? override : usual;
+  let info = 'Ce montant fixe n’est pas actif ce mois-là.';
+  if (version) {
+    const due = frDate(dueInMonth(ym, version.day_of_month));
+    info = override === null ? `Montant habituel : ${euro(usual)} · échéance le ${due}`
+      : `Ce mois : ${override === 0 ? 'pas de paiement' : `modifié à ${euro(override)}`}<br>Montant habituel : ${euro(usual)} · échéance le ${due}`;
+  }
+  openSheet(`
+    <h3>${esc(group.title)}</h3>
+    <p class="hint" style="text-align:center">Change le montant d'un seul mois : les autres mois ne bougent pas.</p>
+    <div class="monthbar">
+      <button type="button" class="icon-btn" id="m-prev" aria-label="Mois précédent">‹</button>
+      <span class="label">${monthLabel(ym)}</span>
+      <button type="button" class="icon-btn" id="m-next" aria-label="Mois suivant">›</button>
+    </div>
+    <label class="field" for="m-amount">Montant pour ce mois (€)</label>
+    <input class="input big" id="m-amount" inputmode="decimal" autocomplete="off" value="${shown === null ? '' : amountText(shown)}" ${version ? '' : 'disabled'}>
+    <p class="hint" style="text-align:center${override !== null ? ';color:var(--orange)' : ''}">${info}</p>
+    ${version ? `<div class="actions">
+      <button type="button" class="secondary" id="m-skip">Pas de paiement ce mois</button>
+      ${override !== null ? `<button type="button" class="secondary" id="m-reset">Rétablir ${euro(usual)}</button>` : ''}
+    </div>` : ''}
+    <p class="error-text"></p>
+    <div class="actions">
+      <button type="button" class="secondary" id="m-all">Tous les mois…</button>
+      <button type="submit" class="primary" ${version ? '' : 'disabled'}>Enregistrer ce mois</button>
+    </div>`, async (form) => {
+    const raw = form.querySelector('#m-amount').value.trim();
+    const value = raw === '' || /^0+([,.]0*)?$/.test(raw) ? 0 : positiveCents(raw);
+    await setFixedMonth(group, ym, value === usual ? null : value);
+  });
+  const form = $('#sheet-form');
+  form.querySelector('#m-prev').addEventListener('click', () => fixedMonthSheet(group, monthShift(`${ym}-01`, -1).slice(0, 7)));
+  form.querySelector('#m-next').addEventListener('click', () => fixedMonthSheet(group, monthShift(`${ym}-01`, 1).slice(0, 7)));
+  form.querySelector('#m-all').addEventListener('click', () => fixedSheet(group));
+  const quick = async (value) => {
+    try {
+      await setFixedMonth(group, ym, value);
+      closeSheet();
+      await refresh(true);
+    } catch (e) {
+      form.querySelector('.error-text').textContent = e.message;
+    }
+  };
+  const skip = form.querySelector('#m-skip'); if (skip) skip.addEventListener('click', () => quick(0));
+  const reset = form.querySelector('#m-reset'); if (reset) reset.addEventListener('click', () => quick(null));
+}
+/** Montant d'un seul mois (0 = pas de paiement) ; null rétablit le montant habituel. */
+async function setFixedMonth(group, ym, value) {
+  if (value === null) await check(sb.from('fixed_overrides').delete().eq('group_id', group.id).eq('month', ym));
+  else await check(sb.from('fixed_overrides').upsert({ group_id: group.id, month: ym, amount_cents: value }, { onConflict: 'group_id,month' }));
+}
+
+/** Arrêter un montant fixe à partir d'un mois (= Store.stop_fixed) : les mois d'avant sont conservés. */
+function stopFixedSheet(group) {
+  const next = nextMonth(todayIso().slice(0, 7));
+  openSheet(`
+    <h3>Arrêter « ${esc(group.title)} »</h3>
+    <p class="hint" style="text-align:center">Les mois précédents sont conservés (historique et solde).<br>
+      Plus aucune échéance à partir du mois choisi.</p>
+    <label class="field" for="s-start">Plus d'échéance à partir du</label>
+    <input class="input" id="s-start" type="date" value="${next}-01">
+    <p class="error-text"></p>
+    <div class="actions">
+      <button type="button" class="secondary" data-close>Annuler</button>
+      <button type="submit" class="primary">Arrêter</button>
+    </div>`, async (form) => {
+    const start = form.querySelector('#s-start').value;
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(start)) throw new Error('Date invalide.');
+    const ym = start.slice(0, 7);
+    if (!confirm(`Plus d'échéance à partir de ${monthLabel(ym).toLowerCase()} ?`)) throw new Error('Arrêt annulé.');
+    await check(sb.from('fixed_versions').delete().eq('group_id', group.id).gte('start_month', ym));
+    await check(sb.from('fixed_versions').update({ end_month: ym }).eq('group_id', group.id).or(`end_month.is.null,end_month.gt.${ym}`));
+    await check(sb.from('fixed_overrides').delete().eq('group_id', group.id).gte('month', ym));
+  });
 }
 
 function transactionSheet(item) {
@@ -1345,6 +1503,13 @@ document.addEventListener('click', async (event) => {
   }
   if (t.closest('#today')) { state.selected = currentMonth(); render(); return; }
   if (t.closest('#add-fixed')) { fixedSheet(); return; }
+  const fixedRow = t.closest('[data-fixed]');
+  if (fixedRow) {
+    const group = fixedGroup(Number(fixedRow.dataset.fixed));
+    if (group && group.received) { toast(`Ce virement se modifie depuis ${compteName(group.compte_id)}.`); return; }
+    if (group) fixedSheet(group);
+    return;
+  }
   if (t.closest('#password-change')) { passwordSheet(); return; }
   if (t.closest('#logout')) {
     if (!confirm('Se déconnecter de Kompte sur ce téléphone ?')) return;
@@ -1362,7 +1527,12 @@ document.addEventListener('click', async (event) => {
   const row = t.closest('[data-item]');
   if (row) {
     const id = Number(row.dataset.item);
-    if (id < 0) { toast('Les montants fixes se modifient sur le PC.'); return; }
+    if (id < 0) {
+      const group = fixedGroup(-id);
+      if (group && group.received) { toast(`Ce virement se modifie depuis ${compteName(group.compte_id)}.`); return; }
+      if (group) fixedMonthSheet(group, (row.dataset.due || todayIso()).slice(0, 7));
+      return;
+    }
     const item = state.data.items.find((i) => i.id === id);
     if (item && item.received) { toast(`Ce virement se modifie depuis ${compteName(item.compte_id)}.`); return; }
     if (item) transactionSheet(item);
