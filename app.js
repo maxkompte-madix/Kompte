@@ -41,6 +41,7 @@ const state = {
   current: null,    // mois en cours à la dernière actualisation de l'écran
   query: '',
   cats: [],         // catégories choisies dans le filtre des transactions
+  deferCat: null,   // catégorie affichée dans le réglage du débit différé
   catsOpen: false,
   loading: false,
   syncError: false,
@@ -140,20 +141,107 @@ function categories() {
     for (const c of saved.categories) {
       const name = String(c.name || '').trim();
       if (!name || list.some((x) => x.name === name) || !/^#[0-9a-fA-F]{6}$/.test(String(c.color))) continue;
-      list.push({ name, color: c.color, icon: c.icon || 'Divers', savings: hasFlag ? !!c.savings : name === 'Épargne' });
+      const deferred = Number.isInteger(c.deferred) && c.deferred >= 1 && c.deferred <= 31 ? c.deferred : null;
+      list.push({ name, color: c.color, icon: c.icon || 'Divers', savings: hasFlag ? !!c.savings : name === 'Épargne', deferred });
     }
   }
   if (list.length) return list;
-  return Object.entries(DEFAULT_COLORS).map(([name, color]) => ({ name, color, icon: name, savings: name === 'Épargne' }));
+  return Object.entries(DEFAULT_COLORS).map(([name, color]) => ({ name, color, icon: name, savings: name === 'Épargne', deferred: null }));
 }
 function category(name) {
-  return categories().find((c) => c.name === name) || { name, color: '#9CA3AF', icon: 'Divers', savings: false };
+  return categories().find((c) => c.name === name) || { name, color: '#9CA3AF', icon: 'Divers', savings: false, deferred: null };
 }
 function iconSlug(icon) { return icon.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase(); }
 function catIcon(name) {
   const c = category(name);
   return `<span class="cat" style="--c:${c.color};--i:url('icons/cat/${iconSlug(c.icon)}.png')"></span>`;
 }
+/** {catégorie: jour du prélèvement} pour le débit différé. */
+function deferredDays() {
+  const days = {};
+  for (const c of categories()) if (c.deferred) days[c.name] = c.deferred;
+  return days;
+}
+
+/** Date où l'opération touche le solde : son échéance, ou le prochain prélèvement après elle. */
+function debitDate(day, due) {
+  if (!day) return due;
+  const debit = dueInMonth(due.slice(0, 7), day);
+  return debit > due ? debit : dueInMonth(nextMonth(due.slice(0, 7)), day);
+}
+
+/** Échéances qui touchent le solde sur [start, end). */
+function balanceEvents(start, end) {
+  if (start >= end) return [];
+  const days = deferredDays();
+  const first = Object.keys(days).length ? addDays(start, -62) : start;
+  return occurrences(first, end).filter((e) => {
+    const debit = debitDate(days[e.row.category], e.due);
+    return start <= debit && debit < end;
+  });
+}
+
+/** Opérations en débit différé déjà passées, pas encore prélevées (somme signée). */
+function pendingDebits() {
+  const days = deferredDays();
+  if (!Object.keys(days).length) return 0;
+  const tomorrow = addDays(todayIso(), 1);
+  return occurrences(addDays(todayIso(), -62), tomorrow)
+    .filter((e) => debitDate(days[e.row.category], e.due) >= tomorrow)
+    .reduce((sum, e) => sum + signed(e), 0);
+}
+
+/** Résultat d'une ligne de note finissant par « = » : mêmes règles que quick_calc() du PC. */
+function quickCalc(line) {
+  const match = line.match(/([0-9€.,()+\-*/xX×÷%\s]+)=\s*$/);
+  if (!match) return null;
+  const text = match[1].replace(/[\s€]/g, '').replace(/,/g, '.').replace(/[xX×]/g, '*').replace(/÷/g, '/')
+    .replace(/^[*/+.%)]+/, '');
+  if (!/[0-9)%][+\-*/]/.test(text)) return null;
+  const tokens = text.match(/\d+\.?\d*|\.\d+|[-+*/()%]/g) || [];
+  if (tokens.join('') !== text) return null;
+  let at = 0;
+  const peek = () => tokens[at];
+  const fail = () => { throw new Error('calcul'); };
+  const factor = () => {
+    const token = peek();
+    let value;
+    if (token === '-') { at += 1; return -factor(); }
+    if (token === '(') {
+      at += 1;
+      value = expression();
+      if (tokens[at++] !== ')') fail();
+    } else if (token === undefined || '+*/)%'.includes(token)) fail();
+    else { value = parseFloat(token); at += 1; }
+    while (peek() === '%') { at += 1; value /= 100; }
+    return value;
+  };
+  const term = () => {
+    let value = factor();
+    while (peek() === '*' || peek() === '/') {
+      const op = tokens[at++];
+      const right = factor();
+      if (op === '/' && right === 0) fail();
+      value = op === '*' ? value * right : value / right;
+    }
+    return value;
+  };
+  function expression() {
+    let value = term();
+    while (peek() === '+' || peek() === '-') {
+      const op = tokens[at++];
+      value = op === '+' ? value + term() : value - term();
+    }
+    return value;
+  }
+  let value;
+  try { value = expression(); } catch (e) { return null; }
+  if (at !== tokens.length || !(Math.abs(value) < 1e15)) return null;
+  const cents = Math.floor(Math.abs(value) * 100 + 0.5);
+  const sign = value < 0 && cents ? '-' : '';
+  return `${sign}${Math.floor(cents / 100)}${cents % 100 ? `,${pad(cents % 100)}` : ''}`;
+}
+
 function isSavings(cat, kind) { return kind === 'Dépense' && category(cat).savings; }
 
 // ----------------------------------------------------- calculs (= kompte.py)
@@ -284,14 +372,14 @@ function getBalance() {
   const anchor = data.as_of, today = todayIso();
   if (anchor > today) return +data.balance_cents;
   const current = new Map();
-  for (const e of occurrences(anchor, addDays(today, 1))) current.set(`${e.row.id}|${e.due}`, signed(e));
+  for (const e of balanceEvents(anchor, addDays(today, 1))) current.set(`${e.row.id}|${e.due}`, signed(e));
   let delta = 0;
   const baseline = data.baseline_events;
   if (baseline && typeof baseline === 'object' && !Array.isArray(baseline)) {
     for (const v of current.values()) delta += v;
     for (const [key, value] of Object.entries(baseline)) {
       const d = key.split('|').pop();
-      if (anchor <= d && d <= today) delta -= parseInt(value, 10);
+      if (d <= today) delta -= parseInt(value, 10);
     }
   } else {
     for (const [key, value] of current) if (key.split('|').pop() > anchor) delta += value;
@@ -509,6 +597,7 @@ function renderDashboard() {
       <small>SOLDE ACTUEL</small>
       <strong>${balance === null ? '— €' : euro(balance)}</strong>
       <span>${ref ? `Depuis le ${frDate(ref.as_of)} · touche pour modifier` : 'Touche ici pour saisir ton solde bancaire actuel'}</span>
+      ${balance !== null && pendingDebits() ? `<span class="pending">Débit différé à venir : ${euro(pendingDebits())}</span>` : ''}
     </button>
     <div class="monthbar">
       <button type="button" class="icon-btn" data-month="-1" aria-label="Mois précédent">‹</button>
@@ -581,6 +670,7 @@ function noteSheet(note) {
     <input class="input" id="n-title" autocomplete="off" value="${note ? esc(note.title) : ''}">
     <label class="field" for="n-body">Texte</label>
     <textarea class="input" id="n-body" rows="7">${note ? esc(note.body) : ''}</textarea>
+    <p class="hint">Calcul rapide : écris par exemple 12,50 + 30 = et le résultat s'ajoute tout seul.</p>
     <label class="field" for="n-link">Associer une transaction ou un montant fixe (facultatif)</label>
     <select class="input" id="n-link"><option value="">Aucun</option>${options}</select>
     <p class="error-text"></p>
@@ -656,6 +746,7 @@ function renderTransactions() {
     const plus = r.kind === 'Revenu';
     let details = `${r.category} · ${frDate(e.due)}`;
     if (transferNote(r)) details += ` · ${transferNote(r)}`;
+    if (category(r.category).deferred) details += ` · débit le ${frDate(debitDate(category(r.category).deferred, e.due))}`;
     if (r.id < 0) details += ' · fixe';
     else if (r.installments > 1) {
       const index = (+e.due.slice(0, 4) - +r.first_date.slice(0, 4)) * 12 + (+e.due.slice(5, 7) - +r.first_date.slice(5, 7));
@@ -718,6 +809,13 @@ function renderFixed() {
     <p class="note">Pour modifier ou arrêter un montant fixe, passe par le PC.</p>`;
 }
 
+/** La catégorie affichée dans le réglage du débit différé. */
+function deferredCategory() {
+  const list = categories();
+  if (list.some((c) => c.name === state.deferCat)) return state.deferCat;
+  return (list.find((c) => c.deferred) || list[0]).name;
+}
+
 function renderAccount() {
   view.innerHTML = `
     <h2>Réglages</h2>
@@ -729,6 +827,15 @@ function renderAccount() {
     </select>
     <p class="hint">${monthLabel(currentMonth())} : ${(periodText(currentMonth()) || 'Du 1er au dernier jour du mois').replace('Du', 'du')}.
       Le mois porte le nom de celui où il a le plus de jours.</p>
+    <label class="field" for="deferred-cat">Débit différé d'une catégorie</label>
+    <select class="input" id="deferred-cat">
+      ${categories().map((c) => `<option value="${esc(c.name)}" ${c.name === deferredCategory() ? 'selected' : ''}>${esc(c.name)}${c.deferred ? ` · le ${c.deferred}` : ''}</option>`).join('')}
+    </select>
+    <select class="input" id="deferred-day" style="margin-top:8px">
+      <option value="">Non : le solde bouge à la date de l'opération</option>
+      ${Array.from({ length: 31 }, (_, i) => i + 1).map((d) => `<option value="${d}" ${d === category(deferredCategory()).deferred ? 'selected' : ''}>Oui : prélevé le ${d} du mois</option>`).join('')}
+    </select>
+    <p class="hint">Compte tout de suite dans les dépenses et le reste prévisionnel ; le solde actuel ne baisse qu'au prélèvement suivant.</p>
     <p class="note">La modification des montants fixes, les comptes épargne et les catégories se font sur le PC ;
       ils sont pris en compte ici dans les calculs.</p>
     <div class="actions">
@@ -998,7 +1105,7 @@ function balanceSheet() {
     if (anchor > todayIso()) throw new Error('La date de référence ne peut pas être dans le futur.');
     await loadAll(); // photographie à partir des données les plus récentes
     const baseline = {};
-    for (const e of occurrences(anchor, addDays(todayIso(), 1))) baseline[`${e.row.id}|${e.due}`] = signed(e);
+    for (const e of balanceEvents(anchor, addDays(todayIso(), 1))) baseline[`${e.row.id}|${e.due}`] = signed(e);
     const value = { ...balances(), [state.compte]: { balance_cents: amount, as_of: anchor, baseline_events: baseline, version: 3 } };
     await check(sb.from('kv_settings').upsert({ key: 'balance', value }, { onConflict: 'user_id,key' }));
   });
@@ -1114,6 +1221,22 @@ document.addEventListener('click', async (event) => {
 
 // Le début du mois s'applique tout de suite, puis part en ligne.
 document.addEventListener('change', async (event) => {
+  if (event.target.id === 'deferred-cat') { state.deferCat = event.target.value; render(); return; }
+  if (event.target.id === 'deferred-day') {
+    const name = deferredCategory();
+    const day = Number(event.target.value) || null;
+    const value = { categories: categories().map((c) => ({ ...c, deferred: c.name === name ? day : c.deferred })) };
+    state.all.kv.categories = value;
+    state.deferCat = name;
+    render();
+    try {
+      await check(sb.from('kv_settings').upsert({ key: 'categories', value }, { onConflict: 'user_id,key' }));
+    } catch (e) {
+      toast('Enregistrement impossible : réessaie.');
+      refresh(true);
+    }
+    return;
+  }
   if (event.target.id !== 'month-start') return;
   const value = { ...(state.all.kv.month_start || {}), [state.compte]: Number(event.target.value) };
   state.all.kv.month_start = value;
@@ -1127,6 +1250,17 @@ document.addEventListener('change', async (event) => {
 });
 
 let searchTimer = null;
+// Notes : « 12,50 + 30 = » reçoit son résultat dès que le = est tapé.
+document.addEventListener('input', (event) => {
+  const box = event.target;
+  if (box.id !== 'n-body' || (event.inputType || '').startsWith('delete')) return;
+  const caret = box.selectionStart;
+  const line = box.value.slice(box.value.lastIndexOf('\n', caret - 1) + 1, caret);
+  if (!line.endsWith('=')) return;
+  const result = quickCalc(line);
+  if (result !== null) box.setRangeText(` ${result}`, caret, caret, 'end');
+});
+
 document.addEventListener('input', (event) => {
   if (event.target.id !== 'search') return;
   clearTimeout(searchTimer);

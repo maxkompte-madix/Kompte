@@ -164,3 +164,4 @@ textarea.input { resize: vertical; font: inherit; }
 .filter-bar { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
 .filter-btn { border: 0; border-radius: 10px; padding: 10px 12px; background: var(--card); color: var(--text); max-width: 70%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .filter-cats { margin-bottom: 12px; }
+.hero .pending { display: block; margin-top: 3px; color: var(--orange); font-weight: 700; }
