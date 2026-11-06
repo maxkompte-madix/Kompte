@@ -165,3 +165,8 @@ textarea.input { resize: vertical; font: inherit; }
 .filter-btn { border: 0; border-radius: 10px; padding: 10px 12px; background: var(--card); color: var(--text); max-width: 70%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .filter-cats { margin-bottom: 12px; }
 .hero .pending { display: block; margin-top: 3px; color: var(--orange); font-weight: 700; }
+.hero .free { display: block; margin-top: 10px; padding-top: 9px; border-top: 1px solid rgba(255,255,255,.08); color: var(--muted); font-size: 11px; font-weight: 700; letter-spacing: .4px; text-transform: uppercase; }
+.hero .free b { display: block; font-size: 24px; letter-spacing: 0; margin: 2px 0; text-transform: none; }
+.hero .free em { display: block; font-style: normal; font-weight: 400; letter-spacing: 0; text-transform: none; }
+.check { display: flex; align-items: center; gap: 10px; margin-top: 14px; color: var(--text); font-size: 15px; }
+.check input { width: 20px; height: 20px; accent-color: var(--orange); }

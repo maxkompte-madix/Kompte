@@ -41,7 +41,6 @@ const state = {
   current: null,    // mois en cours à la dernière actualisation de l'écran
   query: '',
   cats: [],         // catégories choisies dans le filtre des transactions
-  deferCat: null,   // catégorie affichée dans le réglage du débit différé
   catsOpen: false,
   loading: false,
   syncError: false,
@@ -141,54 +140,119 @@ function categories() {
     for (const c of saved.categories) {
       const name = String(c.name || '').trim();
       if (!name || list.some((x) => x.name === name) || !/^#[0-9a-fA-F]{6}$/.test(String(c.color))) continue;
-      const deferred = Number.isInteger(c.deferred) && c.deferred >= 1 && c.deferred <= 31 ? c.deferred : null;
-      list.push({ name, color: c.color, icon: c.icon || 'Divers', savings: hasFlag ? !!c.savings : name === 'Épargne', deferred });
+      list.push({ name, color: c.color, icon: c.icon || 'Divers', savings: hasFlag ? !!c.savings : name === 'Épargne' });
     }
   }
   if (list.length) return list;
-  return Object.entries(DEFAULT_COLORS).map(([name, color]) => ({ name, color, icon: name, savings: name === 'Épargne', deferred: null }));
+  return Object.entries(DEFAULT_COLORS).map(([name, color]) => ({ name, color, icon: name, savings: name === 'Épargne' }));
 }
 function category(name) {
-  return categories().find((c) => c.name === name) || { name, color: '#9CA3AF', icon: 'Divers', savings: false, deferred: null };
+  return categories().find((c) => c.name === name) || { name, color: '#9CA3AF', icon: 'Divers', savings: false };
 }
 function iconSlug(icon) { return icon.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase(); }
 function catIcon(name) {
   const c = category(name);
   return `<span class="cat" style="--c:${c.color};--i:url('icons/cat/${iconSlug(c.icon)}.png')"></span>`;
 }
-/** {catégorie: jour du prélèvement} pour le débit différé. */
-function deferredDays() {
-  const days = {};
-  for (const c of categories()) if (c.deferred) days[c.name] = c.deferred;
-  return days;
+// ------------------------------------------- carte à débit différé (= kompte.py)
+// Un achat carte peut être prélevé jusqu'à ~2 mois après sa date.
+const DEFERRED_LOOKBACK = 70;
+let cardCache = { raw: undefined, map: {} };
+/** {compte: {enabled, cutoff, debit, items: Set}} lu dans le réglage partagé « card ». */
+function cardSettings() {
+  const raw = state.all && state.all.kv.card;
+  if (raw === cardCache.raw) return cardCache.map;
+  const map = {};
+  if (raw && typeof raw === 'object') {
+    for (const [compte, c] of Object.entries(raw)) {
+      if (!c || typeof c !== 'object') continue;
+      const cutoff = Number(c.cutoff), debit = Number(c.debit);
+      if (!Number.isInteger(cutoff) || !Number.isInteger(debit) || cutoff < 1 || cutoff > 28 || debit < 1 || debit > 31) continue;
+      map[compte] = { enabled: c.enabled !== false, cutoff, debit,
+                      items: new Set((Array.isArray(c.items) ? c.items : []).map(Number)) };
+    }
+  }
+  cardCache = { raw, map };
+  return map;
+}
+/** Réglage de la carte du compte, ou null s'il n'a pas de carte à débit différé. */
+function cardConf(compteId) {
+  const c = cardSettings()[compteId];
+  return c && c.enabled ? c : null;
+}
+/** Vrai pour une dépense payée avec la carte à débit différé de son compte. */
+function isCard(row) {
+  if (row.id < 0 || row.kind !== 'Dépense') return false;
+  const c = cardConf(row.compte_id);
+  return !!c && c.items.has(row.id);
+}
+/** Dernier jour du relevé carte qui contient cette date (le jour d'arrêté). */
+function cardCycleEnd(c, due) {
+  const end = dueInMonth(due.slice(0, 7), c.cutoff);
+  return due <= end ? end : dueInMonth(nextMonth(due.slice(0, 7)), c.cutoff);
+}
+/** Premier jour de prélèvement après l'arrêté du relevé. */
+function cardDebit(c, due) {
+  const end = cardCycleEnd(c, due);
+  const debit = dueInMonth(end.slice(0, 7), c.debit);
+  return debit > end ? debit : dueInMonth(nextMonth(end.slice(0, 7)), c.debit);
+}
+function deferredActive() {
+  return Object.values(cardSettings()).some((c) => c.enabled && c.items.size);
 }
 
-/** Date où l'opération touche le solde : son échéance, ou le prochain prélèvement après elle. */
-function debitDate(day, due) {
-  if (!day) return due;
-  const debit = dueInMonth(due.slice(0, 7), day);
-  return debit > due ? debit : dueInMonth(nextMonth(due.slice(0, 7)), day);
+/** Date où l'opération touche le solde : son échéance, ou pour un achat carte la date de prélèvement de son relevé. */
+function debitDate(row, due) {
+  return isCard(row) ? cardDebit(cardConf(row.compte_id), due) : due;
 }
 
 /** Échéances qui touchent le solde sur [start, end). */
 function balanceEvents(start, end) {
   if (start >= end) return [];
-  const days = deferredDays();
-  const first = Object.keys(days).length ? addDays(start, -62) : start;
+  const first = deferredActive() ? addDays(start, -DEFERRED_LOOKBACK) : start;
   return occurrences(first, end).filter((e) => {
-    const debit = debitDate(days[e.row.category], e.due);
+    const debit = debitDate(e.row, e.due);
     return start <= debit && debit < end;
   });
 }
 
-/** Opérations en débit différé déjà passées, pas encore prélevées (somme signée). */
-function pendingDebits() {
-  const days = deferredDays();
-  if (!Object.keys(days).length) return 0;
+/** Opérations déjà passées mais pas encore prélevées : [[date du prélèvement, somme signée]]. */
+function pendingByDate() {
+  if (!deferredActive()) return [];
   const tomorrow = addDays(todayIso(), 1);
-  return occurrences(addDays(todayIso(), -62), tomorrow)
-    .filter((e) => debitDate(days[e.row.category], e.due) >= tomorrow)
-    .reduce((sum, e) => sum + signed(e), 0);
+  const totals = {};
+  for (const e of occurrences(addDays(todayIso(), -DEFERRED_LOOKBACK), tomorrow)) {
+    const debit = debitDate(e.row, e.due);
+    if (debit >= tomorrow) totals[debit] = (totals[debit] || 0) + signed(e);
+  }
+  return Object.entries(totals).sort((a, b) => (a[0] < b[0] ? -1 : 1));
+}
+function pendingDebits() { return pendingByDate().reduce((sum, [, v]) => sum + v, 0); }
+
+/** Argent réellement disponible jusqu'à la fin de la période en cours :
+    solde − achats pas encore prélevés − dépenses prévues d'ici là. */
+function availableMoney(balance) {
+  const tomorrow = addDays(todayIso(), 1);
+  const periodEnd = monthPeriod(currentMonth())[1];
+  let planned = 0;
+  for (const e of occurrences(tomorrow, periodEnd)) if (e.row.kind === 'Dépense') planned += e.amount;
+  return [balance + pendingDebits() - planned, addDays(periodEnd, -1)];
+}
+
+/** Enregistre le réglage « card » (partagé avec le PC). */
+async function saveCard(value) {
+  state.all.kv.card = value;
+  await check(sb.from('kv_settings').upsert({ key: 'card', value }, { onConflict: 'user_id,key' }));
+}
+/** Le réglage « card » avec cette transaction marquée (ou non) comme payée par carte. */
+function cardWithItem(itemId, paid) {
+  const raw = (state.all.kv.card && typeof state.all.kv.card === 'object') ? state.all.kv.card : {};
+  const mine = raw[state.compte];
+  if (!mine) return null;
+  const items = new Set((mine.items || []).map(Number));
+  if (items.has(itemId) === paid) return null;
+  if (paid) items.add(itemId); else items.delete(itemId);
+  return { ...raw, [state.compte]: { ...mine, items: [...items].sort((a, b) => a - b) } };
 }
 
 /** Résultat d'une ligne de note finissant par « = » : mêmes règles que quick_calc() du PC. */
@@ -584,6 +648,7 @@ function eventRow(e) {
 function renderDashboard() {
   const balance = getBalance();
   const ref = balanceReference();
+  const free = balance === null ? null : availableMoney(balance);
   const ym = state.selected;
   const { income, out, paid, events } = summary(ym);
   const isToday = ym === currentMonth();
@@ -597,7 +662,11 @@ function renderDashboard() {
       <small>SOLDE ACTUEL</small>
       <strong>${balance === null ? '— €' : euro(balance)}</strong>
       <span>${ref ? `Depuis le ${frDate(ref.as_of)} · touche pour modifier` : 'Touche ici pour saisir ton solde bancaire actuel'}</span>
-      ${balance !== null && pendingDebits() ? `<span class="pending">Débit différé à venir : ${euro(pendingDebits())}</span>` : ''}
+      ${balance !== null ? pendingByDate().slice(0, 3).filter(([, v]) => v).map(([d, v]) =>
+        `<span class="pending">À prélever le ${frDate(d)} : ${euro(-v)}</span>`).join('') : ''}
+      ${free ? `<span class="free">Disponible jusqu’au ${+free[1].slice(8, 10)} ${MONTHS[+free[1].slice(5, 7) - 1]}
+        <b style="color:var(${free[0] >= 0 ? '--green' : '--red'})">${euro(free[0])}</b>
+        <em>solde − achats pas encore prélevés − dépenses prévues d’ici là</em></span>` : ''}
     </button>
     <div class="monthbar">
       <button type="button" class="icon-btn" data-month="-1" aria-label="Mois précédent">‹</button>
@@ -610,7 +679,7 @@ function renderDashboard() {
       ${metric('Revenus prévus', income, 'var(--green)')}
       ${metric('Dépenses prévues ›', out - paid, 'var(--red)', 'upcoming')}
       ${metric('Déjà dépensé', paid, 'var(--text)')}
-      ${metric('Reste prévisionnel', income - out, 'var(--orange)')}
+      ${metric('Bilan du mois', income - out, 'var(--orange)')}
     </div>
     <button type="button" class="notes-btn" id="notes">Notes${state.data.notes.length ? ` (${state.data.notes.length})` : ''}</button>
     <h2>Dernières opérations</h2>
@@ -746,7 +815,8 @@ function renderTransactions() {
     const plus = r.kind === 'Revenu';
     let details = `${r.category} · ${frDate(e.due)}`;
     if (transferNote(r)) details += ` · ${transferNote(r)}`;
-    if (category(r.category).deferred) details += ` · débit le ${frDate(debitDate(category(r.category).deferred, e.due))}`;
+    if (isCard(r)) details += ' · carte';
+    if (debitDate(r, e.due) !== e.due) details += ` · débit le ${frDate(debitDate(r, e.due))}`;
     if (r.id < 0) details += ' · fixe';
     else if (r.installments > 1) {
       const index = (+e.due.slice(0, 4) - +r.first_date.slice(0, 4)) * 12 + (+e.due.slice(5, 7) - +r.first_date.slice(5, 7));
@@ -809,14 +879,9 @@ function renderFixed() {
     <p class="note">Pour modifier ou arrêter un montant fixe, passe par le PC.</p>`;
 }
 
-/** La catégorie affichée dans le réglage du débit différé. */
-function deferredCategory() {
-  const list = categories();
-  if (list.some((c) => c.name === state.deferCat)) return state.deferCat;
-  return (list.find((c) => c.deferred) || list[0]).name;
-}
-
 function renderAccount() {
+  const saved = cardSettings()[state.compte];
+  const card = saved || { enabled: false, cutoff: 19, debit: 31 };
   view.innerHTML = `
     <h2>Réglages</h2>
     <p class="note" style="margin-top:0">Connecté avec ${esc(state.email)}.<br>
@@ -827,15 +892,21 @@ function renderAccount() {
     </select>
     <p class="hint">${monthLabel(currentMonth())} : ${(periodText(currentMonth()) || 'Du 1er au dernier jour du mois').replace('Du', 'du')}.
       Le mois porte le nom de celui où il a le plus de jours.</p>
-    <label class="field" for="deferred-cat">Débit différé d'une catégorie</label>
-    <select class="input" id="deferred-cat">
-      ${categories().map((c) => `<option value="${esc(c.name)}" ${c.name === deferredCategory() ? 'selected' : ''}>${esc(c.name)}${c.deferred ? ` · le ${c.deferred}` : ''}</option>`).join('')}
+    <label class="field" for="card-cutoff">Carte à débit différé</label>
+    <select class="input" id="card-enabled">
+      <option value="0" ${card.enabled ? '' : 'selected'}>Pas de carte à débit différé</option>
+      <option value="1" ${card.enabled ? 'selected' : ''}>Oui, j'ai une carte à débit différé</option>
     </select>
-    <select class="input" id="deferred-day" style="margin-top:8px">
-      <option value="">Non : le solde bouge à la date de l'opération</option>
-      ${Array.from({ length: 31 }, (_, i) => i + 1).map((d) => `<option value="${d}" ${d === category(deferredCategory()).deferred ? 'selected' : ''}>Oui : prélevé le ${d} du mois</option>`).join('')}
-    </select>
-    <p class="hint">Compte tout de suite dans les dépenses et le reste prévisionnel ; le solde actuel ne baisse qu'au prélèvement suivant.</p>
+    ${card.enabled ? `<div class="row2">
+      <select class="input" id="card-cutoff" style="margin-top:8px">
+        ${Array.from({ length: 28 }, (_, i) => i + 1).map((d) => `<option value="${d}" ${d === card.cutoff ? 'selected' : ''}>Arrêté le ${d}</option>`).join('')}
+      </select>
+      <select class="input" id="card-debit" style="margin-top:8px">
+        ${Array.from({ length: 31 }, (_, i) => i + 1).map((d) => `<option value="${d}" ${d === card.debit ? 'selected' : ''}>Prélevé le ${d === 31 ? 'dernier jour' : d}</option>`).join('')}
+      </select></div>
+      <p class="hint">Relevé en cours : achats du ${frDate(addDays(monthShift(cardCycleEnd(card, todayIso()), -1), 1))}
+        au ${frDate(cardCycleEnd(card, todayIso()))}, prélevés le ${frDate(cardDebit(card, cardCycleEnd(card, todayIso())))}.
+        Coche « Payé par carte » sur chaque achat.</p>` : ''}
     <p class="note">La modification des montants fixes, les comptes épargne et les catégories se font sur le PC ;
       ils sont pris en compte ici dans les calculs.</p>
     <div class="actions">
@@ -1019,6 +1090,8 @@ function transactionSheet(item) {
       <select class="input" id="f-account">${accountOptions(transfer ? transfer.account_id : null)}</select>
     </div>
     ${targetField(editing ? item.vers_compte_id : null)}
+    ${cardConf(state.compte) ? `<label class="check" id="f-card-box"><input type="checkbox" id="f-card"
+      ${(editing ? cardConf(state.compte).items.has(item.id) : true) ? 'checked' : ''}> Payé par carte (débit différé)</label>` : ''}
     <label class="field" for="f-date">${split ? 'Date du premier paiement' : 'Date'}</label>
     <input class="input" id="f-date" type="date" value="${editing ? item.first_date : todayIso()}">
     ${split ? `<label class="field" for="f-count">Nombre de mensualités</label>
@@ -1054,15 +1127,19 @@ function transactionSheet(item) {
     }
     const fields = { title, kind: kindValue, category: catValue, total_cents: total, first_date: due,
                      vers_compte_id: chosenTarget(form, accountId) };
+    const cardBox = form.querySelector('#f-card');
+    const paidByCard = !!cardBox && cardBox.checked && kindValue === 'Dépense' && accountId === null && fields.vers_compte_id === null;
     if (editing) {
       await check(sb.from('items').update({ ...fields, installments: n, frequency: item.frequency }).eq('id', item.id));
       await check(sb.from('savings_transfers').delete().eq('item_id', item.id));
       if (accountId !== null) await check(sb.from('savings_transfers').insert({ item_id: item.id, account_id: accountId }));
       await check(sb.from('confirmations').delete().eq('item_id', item.id));
+      if (cardBox) { const value = cardWithItem(item.id, paidByCard); if (value) await saveCard(value); }
     } else {
       const id = newId();
       await check(sb.from('items').insert({ id, compte_id: state.compte, ...fields, installments: 1, frequency: 'Unique', created_at: utcStamp() }));
       if (accountId !== null) await check(sb.from('savings_transfers').insert({ item_id: id, account_id: accountId }));
+      if (paidByCard) { const value = cardWithItem(id, true); if (value) await saveCard(value); }
     }
   });
 
@@ -1074,6 +1151,8 @@ function transactionSheet(item) {
       if (!confirm('Supprimer cette transaction et toutes ses échéances ?')) return;
       try {
         await check(sb.from('items').delete().eq('id', item.id));
+        const value = cardWithItem(item.id, false);
+        if (value) await saveCard(value);
         closeSheet();
         await refresh(true);
       } catch (e) {
@@ -1221,16 +1300,16 @@ document.addEventListener('click', async (event) => {
 
 // Le début du mois s'applique tout de suite, puis part en ligne.
 document.addEventListener('change', async (event) => {
-  if (event.target.id === 'deferred-cat') { state.deferCat = event.target.value; render(); return; }
-  if (event.target.id === 'deferred-day') {
-    const name = deferredCategory();
-    const day = Number(event.target.value) || null;
-    const value = { categories: categories().map((c) => ({ ...c, deferred: c.name === name ? day : c.deferred })) };
-    state.all.kv.categories = value;
-    state.deferCat = name;
+  if (['card-enabled', 'card-cutoff', 'card-debit'].includes(event.target.id)) {
+    const raw = (state.all.kv.card && typeof state.all.kv.card === 'object') ? state.all.kv.card : {};
+    const mine = raw[state.compte] || { enabled: false, cutoff: 19, debit: 31, items: [] };
+    const field = { 'card-enabled': 'enabled', 'card-cutoff': 'cutoff', 'card-debit': 'debit' }[event.target.id];
+    const v = field === 'enabled' ? event.target.value === '1' : Number(event.target.value);
+    const value = { ...raw, [state.compte]: { ...mine, [field]: v } };
+    state.all.kv.card = value;
     render();
     try {
-      await check(sb.from('kv_settings').upsert({ key: 'categories', value }, { onConflict: 'user_id,key' }));
+      await saveCard(value);
     } catch (e) {
       toast('Enregistrement impossible : réessaie.');
       refresh(true);
