@@ -10,6 +10,7 @@
   --green: #60d7a0;
   --red: #f06470;
   --orange: #f5a044;
+  --blue: #5aa9f0;
   --border: #393239;
   --safe-bottom: env(safe-area-inset-bottom, 0px);
 }
@@ -170,3 +171,4 @@ textarea.input { resize: vertical; font: inherit; }
 .hero .free em { display: block; font-style: normal; font-weight: 400; letter-spacing: 0; text-transform: none; }
 .check { display: flex; align-items: center; gap: 10px; margin-top: 14px; color: var(--text); font-size: 15px; }
 .check input { width: 20px; height: 20px; accent-color: var(--orange); }
+.metric .carry { display: block; font-size: 11px; margin-top: 3px; }

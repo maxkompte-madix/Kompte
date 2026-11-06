@@ -239,6 +239,15 @@ function availableMoney(balance) {
   return [balance + pendingDebits() - planned, addDays(periodEnd, -1)];
 }
 
+/** Ce qui restait à la fin du mois dernier : l'argent réel d'aujourd'hui (solde − achats pas encore prélevés)
+    moins les opérations du mois en cours déjà passées. */
+function carryOver(balance) {
+  const today = todayIso();
+  let passed = 0;
+  for (const e of occurrences(...monthPeriod(currentMonth()))) if (e.due <= today) passed += signed(e);
+  return balance + pendingDebits() - passed;
+}
+
 /** Enregistre le réglage « card » (partagé avec le PC). */
 async function saveCard(value) {
   state.all.kv.card = value;
@@ -649,6 +658,7 @@ function renderDashboard() {
   const balance = getBalance();
   const ref = balanceReference();
   const free = balance === null ? null : availableMoney(balance);
+  const carry = balance === null || state.selected !== currentMonth() ? null : carryOver(balance);
   const ym = state.selected;
   const { income, out, paid, events } = summary(ym);
   const isToday = ym === currentMonth();
@@ -679,7 +689,8 @@ function renderDashboard() {
       ${metric('Revenus prévus', income, 'var(--green)')}
       ${metric('Dépenses prévues ›', out - paid, 'var(--red)', 'upcoming')}
       ${metric('Déjà dépensé', paid, 'var(--text)')}
-      ${metric('Bilan du mois', income - out, 'var(--orange)')}
+      <div class="metric"><small>Bilan du mois</small><b style="color:var(--blue)">${euro(income - out)}</b>
+        ${carry === null ? '' : `<span class="carry" style="color:var(${carry >= 0 ? '--green' : '--red'})">Report du mois dernier : ${carry > 0 ? '+' : ''}${euro(carry)}</span>`}</div>
     </div>
     <button type="button" class="notes-btn" id="notes">Notes${state.data.notes.length ? ` (${state.data.notes.length})` : ''}</button>
     <h2>Dernières opérations</h2>
