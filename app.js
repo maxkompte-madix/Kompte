@@ -38,6 +38,7 @@ const state = {
   version: null,
   tab: 'dashboard',
   selected: todayIso().slice(0, 7),
+  current: null,    // mois en cours à la dernière actualisation de l'écran
   query: '',
   loading: false,
   syncError: false,
@@ -211,8 +212,45 @@ function occurrences(start, end) {
   return results.sort((a, b) => (a.due < b.due ? 1 : a.due > b.due ? -1 : b.row.id - a.row.id));
 }
 
+// ---------------------------------------------------- début du mois (= kompte.py)
+/** Jour où commence le mois du compte ouvert. */
+function monthStart() {
+  const raw = state.all && state.all.kv.month_start;
+  const day = raw && typeof raw === 'object' ? raw[state.compte] : 1;
+  return Number.isInteger(day) && day >= 1 && day <= 28 ? day : 1;
+}
+
+/** Période [début, fin) du mois : elle porte le nom du mois où elle a le plus de jours
+    (jusqu'au 16, celui où elle commence ; ensuite, celui où elle finit). */
+function monthPeriod(ym, day = monthStart()) {
+  const base = day <= 16 ? ym : monthShift(`${ym}-01`, -1).slice(0, 7);
+  const first = `${base}-${pad(day)}`;
+  return [first, monthShift(first, 1)];
+}
+
+/** Le mois (AAAA-MM) dont la période contient cette date. */
+function periodOf(iso, day = monthStart()) {
+  const ym = iso.slice(0, 7);
+  if (+iso.slice(8, 10) >= day) return day <= 16 ? ym : nextMonth(ym);
+  return day > 16 ? ym : monthShift(`${ym}-01`, -1).slice(0, 7);
+}
+
+function currentMonth() { return periodOf(todayIso()); }
+
+/** « Du 14 novembre au 13 décembre », ou rien pour un mois normal. */
+function periodText(ym, day = monthStart()) {
+  if (day <= 1) return '';
+  const [first, after] = monthPeriod(ym, day);
+  const last = addDays(after, -1);
+  return `Du ${+first.slice(8, 10)} ${MONTHS[+first.slice(5, 7) - 1]} au ${+last.slice(8, 10)} ${MONTHS[+last.slice(5, 7) - 1]}`;
+}
+function periodHint() {
+  const text = periodText(state.selected);
+  return text ? `<p class="hint" style="text-align:center;margin:-6px 0 10px">${text}</p>` : '';
+}
+
 function summary(ym) {
-  const events = occurrences(`${ym}-01`, nextMonth(ym) + '-01');
+  const events = occurrences(...monthPeriod(ym));
   const today = todayIso();
   let income = 0, out = 0, paid = 0;
   for (const e of events) {
@@ -365,6 +403,12 @@ function render() {
   $('#switch').hidden = home;
   $('#fab').hidden = true;
   if (home) { renderHome(); return; }
+  // Le mois en cours suit la date et le réglage : l'affichage bascule tout seul.
+  const current = currentMonth();
+  if (state.current !== current) {
+    if (state.selected === state.current) state.selected = current;
+    state.current = current;
+  }
   $('#switch').textContent = state.all.comptes.find((c) => c.id === state.compte).name;
   document.querySelectorAll('#tabs button').forEach((b) => b.classList.toggle('active', b.dataset.tab === state.tab));
   $('#fab').hidden = state.tab !== 'dashboard'; // Transactions : lecture seule
@@ -452,7 +496,7 @@ function renderDashboard() {
   const ref = balanceReference();
   const ym = state.selected;
   const { income, out, paid, events } = summary(ym);
-  const isToday = ym === todayIso().slice(0, 7);
+  const isToday = ym === currentMonth();
   const today = todayIso();
   // Seulement ce qui a déjà eu lieu, les 10 plus récentes (le détail est dans Transactions).
   const done = events.filter((e) => e.due <= today).slice(0, 10);
@@ -469,6 +513,7 @@ function renderDashboard() {
       <span class="label">${monthLabel(ym)}</span>
       <button type="button" class="icon-btn" data-month="1" aria-label="Mois suivant">›</button>
     </div>
+    ${periodHint()}
     ${isToday ? '' : '<p style="text-align:center;margin:-6px 0 10px"><button type="button" class="chip" id="today">Revenir à aujourd’hui</button></p>'}
     <div class="metrics">
       ${metric('Revenus prévus', income, 'var(--green)')}
@@ -616,6 +661,7 @@ function renderTransactions() {
       <span class="label">${month[0].toUpperCase() + month.slice(1)}</span>
       <button type="button" class="icon-btn" data-month="1" aria-label="Mois suivant">›</button>
     </div>
+    ${periodHint()}
     <div class="totals"><span class="plus">+${euro(income)}</span><span class="minus">−${euro(out)}</span>
       <span>= ${euro(income - out)}</span></div>
     <input class="search" id="search" type="search" placeholder="Rechercher dans le mois…" value="${esc(state.query)}">
@@ -654,6 +700,12 @@ function renderAccount() {
     <h2>Réglages</h2>
     <p class="note" style="margin-top:0">Connecté avec ${esc(state.email)}.<br>
       Les modifications faites ici apparaissent sur le PC en quelques secondes, et inversement.</p>
+    <label class="field" for="month-start">Début du mois pour ${esc(compteName(state.compte))}</label>
+    <select class="input" id="month-start">
+      ${Array.from({ length: 28 }, (_, i) => i + 1).map((d) => `<option value="${d}" ${d === monthStart() ? 'selected' : ''}>Le ${d === 1 ? '1er' : d}</option>`).join('')}
+    </select>
+    <p class="hint">${monthLabel(currentMonth())} : ${(periodText(currentMonth()) || 'Du 1er au dernier jour du mois').replace('Du', 'du')}.
+      Le mois porte le nom de celui où il a le plus de jours.</p>
     <p class="note">La modification des montants fixes, les comptes épargne et les catégories se font sur le PC ;
       ils sont pris en compte ici dans les calculs.</p>
     <div class="actions">
@@ -985,7 +1037,8 @@ document.addEventListener('click', async (event) => {
   if (compte) {
     openCompte(Number(compte.dataset.compte));
     state.tab = 'dashboard';
-    state.selected = todayIso().slice(0, 7);
+    state.selected = currentMonth();
+    state.current = state.selected;
     state.query = '';
     render();
     return;
@@ -1000,7 +1053,7 @@ document.addEventListener('click', async (event) => {
     if (note) noteSheet(note);
     return;
   }
-  if (t.closest('#today')) { state.selected = todayIso().slice(0, 7); render(); return; }
+  if (t.closest('#today')) { state.selected = currentMonth(); render(); return; }
   if (t.closest('#add-fixed')) { fixedSheet(); return; }
   if (t.closest('#password-change')) { passwordSheet(); return; }
   if (t.closest('#logout')) {
@@ -1023,6 +1076,20 @@ document.addEventListener('click', async (event) => {
     const item = state.data.items.find((i) => i.id === id);
     if (item && item.received) { toast(`Ce virement se modifie depuis ${compteName(item.compte_id)}.`); return; }
     if (item) transactionSheet(item);
+  }
+});
+
+// Le début du mois s'applique tout de suite, puis part en ligne.
+document.addEventListener('change', async (event) => {
+  if (event.target.id !== 'month-start') return;
+  const value = { ...(state.all.kv.month_start || {}), [state.compte]: Number(event.target.value) };
+  state.all.kv.month_start = value;
+  render();
+  try {
+    await check(sb.from('kv_settings').upsert({ key: 'month_start', value }, { onConflict: 'user_id,key' }));
+  } catch (e) {
+    toast('Enregistrement impossible : réessaie.');
+    refresh(true);
   }
 });
 
