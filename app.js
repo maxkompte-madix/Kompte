@@ -637,6 +637,7 @@ function render() {
   $('#fab').hidden = state.tab !== 'dashboard'; // Transactions : lecture seule
   if (state.tab === 'transactions') renderTransactions();
   else if (state.tab === 'fixed') renderFixed();
+  else if (state.tab === 'savings') renderSavings();
   else if (state.tab === 'account') renderAccount();
   else renderDashboard();
 }
@@ -952,6 +953,84 @@ function renderFixed() {
     <p class="note">Touche un montant fixe pour le modifier, changer un seul mois ou l'arrêter.</p>`;
 }
 
+// ------------------------------------------------------ épargne (= accounts_page du PC)
+/** Solde d'un compte épargne (= Store.account_balance) : solde initial + virements jusqu'à aujourd'hui. */
+function accountBalance(accountId) {
+  const account = state.data.savings_accounts.find((a) => a.id === accountId);
+  if (!account) return 0;
+  const through = todayIso();
+  let total = account.opening_cents;
+  for (const t of state.data.savings_transfers) {
+    if (t.account_id !== accountId) continue;
+    const item = state.all.items.find((i) => i.id === t.item_id);
+    if (item && item.first_date <= through) total += item.kind === 'Dépense' ? item.total_cents : -item.total_cents;
+  }
+  const groups = new Set(state.data.fixed_savings_transfers.filter((t) => t.account_id === accountId).map((t) => t.group_id));
+  if (groups.size) {
+    for (const e of fixedEvents('0000-01-01', addDays(through, 1))) {
+      if (groups.has(-e.row.id)) total += e.row.kind === 'Dépense' ? e.amount : -e.amount;
+    }
+  }
+  return total;
+}
+
+function renderSavings() {
+  const accounts = [...state.data.savings_accounts].sort((a, b) => a.name.localeCompare(b.name, 'fr', { sensitivity: 'base' }));
+  const rows = accounts.map((a) => `<button type="button" class="row" data-saving="${a.id}">
+      ${catIcon('Épargne')}
+      <span class="body"><span class="title">${esc(a.name)}</span></span>
+      <span class="amount plus">${euro(accountBalance(a.id))}</span>
+    </button>`).join('');
+  view.innerHTML = `
+    <h2>Épargne</h2>
+    <button type="button" class="primary wide" id="add-saving">+ Ajouter un compte épargne</button>
+    <div class="list">${rows || '<p class="empty">Aucun compte épargne. Ajoute un compte pour y affecter tes virements.</p>'}</div>
+    <p class="note">Pour alimenter un compte, ajoute une dépense (ou un montant fixe) dans la catégorie Épargne
+      et choisis le compte. Les virements futurs sont crédités seulement à leur date.</p>`;
+}
+
+function savingSheet(account = null) {
+  openSheet(`
+    <h3>${account ? 'Modifier le compte' : 'Nouveau compte épargne'}</h3>
+    <label class="field" for="a-name">Nom du compte</label>
+    <input class="input" id="a-name" autocomplete="off" value="${account ? esc(account.name) : ''}">
+    <label class="field" for="a-opening">Solde initial (€)</label>
+    <input class="input big" id="a-opening" inputmode="decimal" autocomplete="off" value="${account ? amountText(account.opening_cents) : '0'}">
+    <p class="hint">Ce qu'il y avait sur le compte avant les virements enregistrés dans Kompte.</p>
+    <p class="error-text"></p>
+    <div class="actions">
+      ${account ? '<button type="button" class="secondary danger" id="a-delete">Supprimer</button>' : ''}
+      <button type="button" class="secondary" data-close>Annuler</button>
+      <button type="submit" class="primary">Enregistrer</button>
+    </div>`, async (form) => {
+    const name = form.querySelector('#a-name').value.trim();
+    if (!name) throw new Error('Le nom est obligatoire.');
+    const opening = parseAmount(form.querySelector('#a-opening').value);
+    if (account) await check(sb.from('savings_accounts').update({ name, opening_cents: opening }).eq('id', account.id));
+    else await check(sb.from('savings_accounts').insert({ id: newId(), compte_id: state.compte, name, opening_cents: opening }));
+  });
+  const form = $('#sheet-form');
+  if (account) {
+    form.querySelector('#a-delete').addEventListener('click', async () => {
+      const used = state.data.savings_transfers.some((t) => t.account_id === account.id)
+        || state.data.fixed_savings_transfers.some((t) => t.account_id === account.id);
+      if (used) {
+        form.querySelector('.error-text').textContent = 'Ce compte possède des virements. Supprime ou réaffecte-les avant de supprimer le compte.';
+        return;
+      }
+      if (!confirm(`Supprimer le compte épargne « ${account.name} » ?`)) return;
+      try {
+        await check(sb.from('savings_accounts').delete().eq('id', account.id));
+        closeSheet();
+        await refresh(true);
+      } catch (e) {
+        form.querySelector('.error-text').textContent = 'Suppression impossible : ce compte possède peut-être des virements.';
+      }
+    });
+  }
+  setTimeout(() => form.querySelector('#a-name').focus(), 120);
+}
+
 function renderAccount() {
   const saved = cardSettings()[state.compte];
   const card = saved || { enabled: false, cutoff: 19, debit: 31 };
@@ -1188,7 +1267,7 @@ function fixedSheet(group = null) {
     let accountId = null;
     if (isSavings(cat, chosenKind)) {
       accountId = Number(form.querySelector('#f-account').value) || null;
-      if (accountId === null) throw new Error('Crée un compte épargne sur le PC (onglet Épargne) avant de transférer ton épargne.');
+      if (accountId === null) throw new Error('Crée d\'abord un compte épargne (onglet Épargne).');
     }
     const target = chosenTarget(form, accountId);
     await saveFixed(group, { title, category: cat, kind: chosenKind, amount, start: start.slice(0, 7), day, accountId, target });
@@ -1352,7 +1431,7 @@ function transactionSheet(item) {
     if (isSavings(catValue, kindValue)) {
       if (n > 1) throw new Error('Les virements épargne ne peuvent pas être fractionnés.');
       accountId = Number(form.querySelector('#f-account').value) || null;
-      if (accountId === null) throw new Error('Crée un compte épargne sur le PC (onglet Épargne) avant de transférer ton épargne.');
+      if (accountId === null) throw new Error('Crée d\'abord un compte épargne (onglet Épargne).');
     }
     const fields = { title, kind: kindValue, category: catValue, total_cents: total, first_date: due,
                      vers_compte_id: chosenTarget(form, accountId) };
@@ -1503,6 +1582,13 @@ document.addEventListener('click', async (event) => {
   }
   if (t.closest('#today')) { state.selected = currentMonth(); render(); return; }
   if (t.closest('#add-fixed')) { fixedSheet(); return; }
+  if (t.closest('#add-saving')) { savingSheet(); return; }
+  const savingRow = t.closest('[data-saving]');
+  if (savingRow) {
+    const account = state.data.savings_accounts.find((a) => a.id === Number(savingRow.dataset.saving));
+    if (account) savingSheet(account);
+    return;
+  }
   const fixedRow = t.closest('[data-fixed]');
   if (fixedRow) {
     const group = fixedGroup(Number(fixedRow.dataset.fixed));

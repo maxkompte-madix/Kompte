@@ -97,7 +97,7 @@ button.metric:active { background: var(--input); }
 
 .tabs {
   position: fixed; left: 0; right: 0; bottom: 0; z-index: 6;
-  display: grid; grid-template-columns: repeat(4, 1fr);
+  display: grid; grid-template-columns: repeat(5, 1fr);
   background: var(--panel); border-top: 1px solid #222;
   padding-bottom: var(--safe-bottom);
 }
