@@ -161,3 +161,6 @@ label.field { display: block; color: var(--muted); font-size: 13px; margin: 12px
 .note-link { flex: 0 0 auto; max-width: 42%; display: flex; flex-direction: column; align-items: flex-end; gap: 2px; font-size: 12px; }
 .note-link > span:first-child { max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 textarea.input { resize: vertical; font: inherit; }
+.filter-bar { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+.filter-btn { border: 0; border-radius: 10px; padding: 10px 12px; background: var(--card); color: var(--text); max-width: 70%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.filter-cats { margin-bottom: 12px; }

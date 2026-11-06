@@ -40,6 +40,8 @@ const state = {
   selected: todayIso().slice(0, 7),
   current: null,    // mois en cours à la dernière actualisation de l'écran
   query: '',
+  cats: [],         // catégories choisies dans le filtre des transactions
+  catsOpen: false,
   loading: false,
   syncError: false,
   email: '',
@@ -629,10 +631,26 @@ function upcomingSheet() {
 /** Toutes les opérations du mois choisi (année puis mois, chacun avec ses flèches). Lecture seule. */
 function renderTransactions() {
   const ym = state.selected;
-  const { income, out, events } = summary(ym);
+  const { events } = summary(ym);
+  // Toutes les catégories, y compris celles créées à la main ou supprimées depuis.
+  const known = categories().map((c) => c.name);
+  const extra = [...new Set(events.map((e) => e.row.category))].filter((n) => !known.includes(n)).sort((a, b) => a.localeCompare(b, 'fr'));
+  const names = [...known, ...extra];
+  state.cats = state.cats.filter((n) => names.includes(n));
+  const chosen = state.cats;
   const needle = state.query.toLowerCase();
-  const shown = events.filter((e) => !needle || e.row.title.toLowerCase().includes(needle)
-    || e.row.category.toLowerCase().includes(needle) || amountText(e.amount).includes(needle.replace('.', ',')));
+  const shown = events.filter((e) => (!chosen.length || chosen.includes(e.row.category))
+    && (!needle || e.row.title.toLowerCase().includes(needle)
+    || e.row.category.toLowerCase().includes(needle) || amountText(e.amount).includes(needle.replace('.', ','))));
+  const income = shown.reduce((sum, e) => sum + (e.row.kind === 'Revenu' ? e.amount : 0), 0);
+  const out = shown.reduce((sum, e) => sum + (e.row.kind === 'Revenu' ? 0 : e.amount), 0);
+  const filterLabel = !chosen.length ? 'Catégories : toutes'
+    : chosen.length === 1 ? `Catégorie : ${esc(chosen[0])}` : `Catégories : ${chosen.length} choisies`;
+  const filterGrid = !state.catsOpen ? '' : `<div class="cats filter-cats">${names.map((n) => {
+    const c = category(n);
+    return `<button type="button" data-filter-cat="${esc(n)}" class="${chosen.includes(n) ? 'on' : ''}" style="--c:${c.color}">
+       ${catIcon(n)}<span>${esc(n)}</span></button>`;
+  }).join('')}</div>`;
   const rows = shown.map((e) => {
     const r = e.row;
     const plus = r.kind === 'Revenu';
@@ -665,7 +683,12 @@ function renderTransactions() {
     <div class="totals"><span class="plus">+${euro(income)}</span><span class="minus">−${euro(out)}</span>
       <span>= ${euro(income - out)}</span></div>
     <input class="search" id="search" type="search" placeholder="Rechercher dans le mois…" value="${esc(state.query)}">
-    <div class="list">${rows || `<p class="empty">${state.query ? 'Aucune opération trouvée.' : 'Aucune opération ce mois-ci.'}</p>`}</div>`;
+    <div class="filter-bar">
+      <button type="button" class="filter-btn" id="cat-filter">${filterLabel} ${state.catsOpen ? '▲' : '▼'}</button>
+      ${chosen.length ? '<button type="button" class="chip" id="cat-reset">Tout afficher</button>' : ''}
+    </div>
+    ${filterGrid}
+    <div class="list">${rows || `<p class="empty">${state.query || chosen.length ? 'Aucune opération trouvée.' : 'Aucune opération ce mois-ci.'}</p>`}</div>`;
 }
 
 /** Montants fixes : on peut en ajouter ici ; les modifier reste sur le PC. */
@@ -1040,6 +1063,7 @@ document.addEventListener('click', async (event) => {
     state.selected = currentMonth();
     state.current = state.selected;
     state.query = '';
+    state.cats = [];
     render();
     return;
   }
@@ -1051,6 +1075,15 @@ document.addEventListener('click', async (event) => {
   if (noteRow) {
     const note = state.data.notes.find((n) => n.id === Number(noteRow.dataset.note));
     if (note) noteSheet(note);
+    return;
+  }
+  if (t.closest('#cat-filter')) { state.catsOpen = !state.catsOpen; render(); return; }
+  if (t.closest('#cat-reset')) { state.cats = []; render(); return; }
+  const filterCat = t.closest('[data-filter-cat]');
+  if (filterCat) {
+    const name = filterCat.dataset.filterCat;
+    state.cats = state.cats.includes(name) ? state.cats.filter((n) => n !== name) : [...state.cats, name];
+    render();
     return;
   }
   if (t.closest('#today')) { state.selected = currentMonth(); render(); return; }
