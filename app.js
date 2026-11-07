@@ -602,6 +602,166 @@ function budgetEditSheet() {
   });
 }
 
+// ------------------------------------------------ export Excel d'un mois (= export_month du PC)
+// Fichier .xlsx écrit à la main (XML + zip sans compression) : aucune bibliothèque à charger.
+const CRC_TABLE = (() => {
+  const t = new Uint32Array(256);
+  for (let n = 0; n < 256; n++) {
+    let c = n;
+    for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1;
+    t[n] = c >>> 0;
+  }
+  return t;
+})();
+function crc32(bytes) {
+  let c = 0xFFFFFFFF;
+  for (let i = 0; i < bytes.length; i++) c = CRC_TABLE[(c ^ bytes[i]) & 0xFF] ^ (c >>> 8);
+  return (c ^ 0xFFFFFFFF) >>> 0;
+}
+/** Archive zip (méthode « stockée ») : [[nom, texte]] → Uint8Array. */
+function zipFiles(files) {
+  const enc = new TextEncoder();
+  const parts = [], central = [];
+  let offset = 0;
+  for (const [name, text] of files) {
+    const nameBytes = enc.encode(name), data = enc.encode(text), crc = crc32(data);
+    const local = new DataView(new ArrayBuffer(30));
+    local.setUint32(0, 0x04034b50, true); local.setUint16(4, 20, true); local.setUint16(6, 0x0800, true);
+    local.setUint32(14, crc, true); local.setUint32(18, data.length, true); local.setUint32(22, data.length, true);
+    local.setUint16(26, nameBytes.length, true);
+    parts.push(new Uint8Array(local.buffer), nameBytes, data);
+    const dir = new DataView(new ArrayBuffer(46));
+    dir.setUint32(0, 0x02014b50, true); dir.setUint16(4, 20, true); dir.setUint16(6, 20, true); dir.setUint16(8, 0x0800, true);
+    dir.setUint32(16, crc, true); dir.setUint32(20, data.length, true); dir.setUint32(24, data.length, true);
+    dir.setUint16(28, nameBytes.length, true); dir.setUint32(42, offset, true);
+    central.push(new Uint8Array(dir.buffer), nameBytes);
+    offset += 30 + nameBytes.length + data.length;
+  }
+  const size = central.reduce((t, p) => t + p.length, 0);
+  const end = new DataView(new ArrayBuffer(22));
+  end.setUint32(0, 0x06054b50, true); end.setUint16(8, files.length, true); end.setUint16(10, files.length, true);
+  end.setUint32(12, size, true); end.setUint32(16, offset, true);
+  const all = [...parts, ...central, new Uint8Array(end.buffer)];
+  const out = new Uint8Array(all.reduce((t, p) => t + p.length, 0));
+  let at = 0;
+  for (const p of all) { out.set(p, at); at += p.length; }
+  return out;
+}
+const xmlEsc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+/** Cellule : {t: texte} | {n: nombre, s: style} | {d: 'AAAA-MM-JJ'} ; styles 1 = gras, 2 = €, 3 = date, 4 = € gras. */
+function sheetXml(rows, widths) {
+  const col = (i) => { let s = ''; for (i += 1; i; i = Math.floor((i - 1) / 26)) s = String.fromCharCode(65 + ((i - 1) % 26)) + s; return s; };
+  const cell = (c, r, i) => {
+    if (c === null || c === undefined || c === '') return '';
+    const ref = `${col(i)}${r}`;
+    if (typeof c !== 'object') c = { t: c };
+    if (c.d) return `<c r="${ref}" s="3"><v>${Math.round((Date.UTC(+c.d.slice(0, 4), +c.d.slice(5, 7) - 1, +c.d.slice(8, 10)) - Date.UTC(1899, 11, 30)) / 86400000)}</v></c>`;
+    if (c.n !== undefined) return `<c r="${ref}" s="${c.s || 2}"><v>${(c.n / 100).toFixed(2)}</v></c>`;
+    return `<c r="${ref}" t="inlineStr"${c.s ? ` s="${c.s}"` : ''}><is><t xml:space="preserve">${xmlEsc(c.t)}</t></is></c>`;
+  };
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+<cols>${widths.map((w, i) => `<col min="${i + 1}" max="${i + 1}" width="${w}" customWidth="1"/>`).join('')}</cols>
+<sheetData>${rows.map((row, r) => `<row r="${r + 1}">${row.map((c, i) => cell(c, r + 1, i)).join('')}</row>`).join('')}</sheetData>
+</worksheet>`;
+}
+function workbookFiles(sheets) {
+  const ns = 'http://schemas.openxmlformats.org/';
+  return [
+    ['[Content_Types].xml', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="${ns}package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+<Default Extension="xml" ContentType="application/xml"/>
+<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
+<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>
+${sheets.map((_, i) => `<Override PartName="/xl/worksheets/sheet${i + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>`).join('')}</Types>`],
+    ['_rels/.rels', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="${ns}package/2006/relationships"><Relationship Id="rId1" Type="${ns}officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>`],
+    ['xl/workbook.xml', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<workbook xmlns="${ns}spreadsheetml/2006/main" xmlns:r="${ns}officeDocument/2006/relationships"><sheets>
+${sheets.map((s, i) => `<sheet name="${xmlEsc(s.name)}" sheetId="${i + 1}" r:id="rId${i + 1}"/>`).join('')}</sheets></workbook>`],
+    ['xl/_rels/workbook.xml.rels', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="${ns}package/2006/relationships">
+${sheets.map((_, i) => `<Relationship Id="rId${i + 1}" Type="${ns}officeDocument/2006/relationships/worksheet" Target="worksheets/sheet${i + 1}.xml"/>`).join('')}
+<Relationship Id="rId${sheets.length + 1}" Type="${ns}officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>`],
+    ['xl/styles.xml', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<styleSheet xmlns="${ns}spreadsheetml/2006/main">
+<numFmts count="2"><numFmt numFmtId="164" formatCode="#,##0.00\\ &quot;€&quot;"/><numFmt numFmtId="165" formatCode="dd/mm/yyyy"/></numFmts>
+<fonts count="2"><font><sz val="11"/><name val="Calibri"/></font><font><b/><sz val="11"/><name val="Calibri"/></font></fonts>
+<fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill></fills>
+<borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders>
+<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>
+<cellXfs count="5"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>
+<xf numFmtId="0" fontId="1" fillId="0" borderId="0" xfId="0" applyFont="1"/>
+<xf numFmtId="164" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/>
+<xf numFmtId="165" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/>
+<xf numFmtId="164" fontId="1" fillId="0" borderId="0" xfId="0" applyNumberFormat="1" applyFont="1"/></cellXfs>
+<cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>
+</styleSheet>`],
+    ...sheets.map((s, i) => [`xl/worksheets/sheet${i + 1}.xml`, sheetXml(s.rows, s.widths)]),
+  ];
+}
+
+/** Les trois feuilles d'un mois : opérations, résumé, budgets (mêmes contenus que le PC). */
+function monthSheets(ym) {
+  const { income, out, events } = summary(ym);
+  const B = (t) => ({ t, s: 1 });
+  const ops = [[B('Date'), B('Description'), B('Catégorie'), B('Sous-catégorie'), B('Type'), B('Montant'), B('Détails')]];
+  for (const e of [...events].sort((a, b) => (a.due < b.due ? -1 : a.due > b.due ? 1 : 0))) {
+    const r = e.row;
+    const details = [];
+    if (r.id < 0) details.push('montant fixe');
+    if (isCard(r)) details.push('carte');
+    if (debitDate(r, e.due) !== e.due) details.push(`débit le ${frDate(debitDate(r, e.due))}`);
+    if (transferNote(r)) details.push(transferNote(r));
+    const sub = subOf(r);
+    ops.push([{ d: e.due }, r.title, r.category, sub ? sub.name : '', r.kind, { n: signed(e) }, details.join(' · ')]);
+  }
+  const byCat = {};
+  for (const e of events) if (e.row.kind === 'Dépense') byCat[e.row.category] = (byCat[e.row.category] || 0) + e.amount;
+  const resume = [[B('Compte'), compteName(state.compte)], [B('Mois'), monthLabel(ym)],
+    [B('Période'), periodText(ym) || 'Du 1er au dernier jour du mois'], [],
+    [B('Revenus'), { n: income }], [B('Dépenses'), { n: out }], [B('Bilan du mois'), { n: income - out, s: 4 }], [],
+    [B('Dépenses par catégorie'), B('Montant')],
+    ...Object.entries(byCat).sort((a, b) => b[1] - a[1]).map(([c, v]) => [c, { n: v }])];
+  const budgets = [[B('Budget'), B('Base'), B('Report'), B('Budget du mois'), B('Dépensé'), B('Reste')],
+    ...budgetRows(ym).map((r) => [r.key.includes('|') ? `${r.key.split('|')[0]} › ${r.label}` : r.label,
+      { n: r.base }, { n: r.carry }, { n: r.budget }, { n: r.spent }, { n: r.budget - r.spent }])];
+  return [{ name: 'Opérations', rows: ops, widths: [12, 30, 16, 18, 10, 14, 34] },
+          { name: 'Résumé', rows: resume, widths: [26, 34] },
+          { name: 'Budgets', rows: budgets, widths: [30, 13, 13, 16, 13, 13] }];
+}
+function monthWorkbook(ym) { return zipFiles(workbookFiles(monthSheets(ym))); }
+
+function exportSheet() {
+  const now = currentMonth();
+  const months = Array.from({ length: 25 }, (_, i) => monthShift(`${now}-01`, -i).slice(0, 7));
+  openSheet(`
+    <h3>Exporter un mois en Excel</h3>
+    <p class="hint" style="text-align:center">Pour ${esc(compteName(state.compte))} : toutes les opérations du mois,
+      un résumé (revenus, dépenses, catégories) et les budgets.</p>
+    <label class="field" for="x-month">Mois</label>
+    <select class="input" id="x-month">${months.map((m) => `<option value="${m}">${monthLabel(m)}</option>`).join('')}</select>
+    <p class="error-text"></p>
+    <div class="actions">
+      <button type="button" class="secondary" data-close>Annuler</button>
+      <button type="submit" class="primary">Créer le fichier</button>
+    </div>`, async (form) => {
+    const ym = form.querySelector('#x-month').value;
+    const name = `Kompte ${compteName(state.compte)} ${ym}.xlsx`.replace(/[\\/:*?"<>|]/g, '-');
+    const file = new File([monthWorkbook(ym)], name,
+      { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+    // iPhone : la feuille de partage permet « Enregistrer dans Fichiers », Mail, etc.
+    if (navigator.canShare && navigator.canShare({ files: [file] })) {
+      try { await navigator.share({ files: [file], title: name }); } catch (e) { if (e.name !== 'AbortError') throw e; }
+    } else {
+      const url = URL.createObjectURL(file);
+      const a = document.createElement('a');
+      a.href = url; a.download = name; document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 10000);
+    }
+  });
+}
+
 /** Enregistre le réglage « card » (partagé avec le PC). */
 async function saveCard(value) {
   state.all.kv.card = value;
@@ -1549,6 +1709,8 @@ function renderAccount() {
         au ${frDate(cardCycleEnd(card, todayIso()))}, prélevés le ${frDate(cardDebit(card, cardCycleEnd(card, todayIso())))}.
         Coche « Payé par carte » sur chaque achat.</p>` : ''}
     ${categoriesSection()}
+    <label class="field">Historique</label>
+    <button type="button" class="secondary wide" id="export-month">Exporter un mois en Excel</button>
     <div class="actions">
       <button type="button" class="secondary" id="password-change">Changer le mot de passe</button>
       <button type="button" class="secondary" id="logout">Se déconnecter</button>
@@ -2127,6 +2289,7 @@ document.addEventListener('click', async (event) => {
   if (t.closest('#add-fixed')) { fixedSheet(); return; }
   if (t.closest('#add-saving')) { savingSheet(); return; }
   if (t.closest('#add-category')) { categorySheet(); return; }
+  if (t.closest('#export-month')) { exportSheet(); return; }
   const catRow = t.closest('[data-category]');
   if (catRow) { categorySheet(catRow.dataset.category); return; }
   const move = t.closest('[data-deposit], [data-withdraw]');
