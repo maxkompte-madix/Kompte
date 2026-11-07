@@ -124,7 +124,11 @@ label.field { display: block; color: var(--muted); font-size: 13px; margin: 12px
 .input {
   width: 100%; padding: 12px 14px; border-radius: 10px; border: 1px solid transparent;
   background: var(--input); font-size: 16px;
+  color: var(--text); -webkit-text-fill-color: var(--text); /* sinon Safari (iPhone) écrit en foncé sur fond foncé */
 }
+.input::placeholder { color: var(--muted); -webkit-text-fill-color: var(--muted); opacity: 1; }
+.input:disabled { opacity: .55; }
+select.input { color: var(--text); }
 .input:focus { outline: none; border-color: var(--accent); }
 .input.big { font-size: 24px; font-weight: 700; }
 .segmented { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
@@ -161,7 +165,7 @@ label.field { display: block; color: var(--muted); font-size: 13px; margin: 12px
 .notes-btn { display: block; width: 100%; margin-top: 10px; border: 0; border-radius: 12px; padding: 13px; background: var(--card); color: var(--text); font-weight: 700; font-size: 15px; }
 .note-link { flex: 0 0 auto; max-width: 42%; display: flex; flex-direction: column; align-items: flex-end; gap: 2px; font-size: 12px; }
 .note-link > span:first-child { max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-textarea.input { resize: vertical; font: inherit; }
+textarea.input { resize: vertical; font: inherit; font-size: 16px; line-height: 1.5; min-height: 170px; }
 .filter-bar { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
 .filter-btn { border: 0; border-radius: 10px; padding: 10px 12px; background: var(--card); color: var(--text); max-width: 70%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .filter-cats { margin-bottom: 12px; }
@@ -192,3 +196,6 @@ textarea.input { resize: vertical; font: inherit; }
 .pocket-split .input { margin: 0; text-align: right; }
 .saving-actions { margin-top: 12px; }
 .saving-actions .secondary { flex: 1; padding: 10px; }
+/* Liste des notes : aperçu plus lisible, sur deux lignes */
+.row[data-note] .sub { color: #cfc8cb; font-size: 13px; white-space: normal; display: -webkit-box;
+  -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; margin-top: 2px; }
