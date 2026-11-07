@@ -321,19 +321,22 @@ function cleanSubs(subs) {
 }
 function subsOf(categoryName) { return category(categoryName).subs || []; }
 /** Sous-catégorie d'une opération (seulement si elle existe encore dans sa catégorie), sinon null. */
+/** (Une échéance fixe a un numéro négatif : sa sous-catégorie est celle du montant fixe, réglage « fixed_subs ».) */
 function subOf(row) {
-  if (!row || row.id < 0) return null;
-  const tags = state.all && state.all.kv.meal_tags;
-  const id = tags && typeof tags === 'object' ? tags[row.id] : null;
+  if (!row) return null;
+  const tags = state.all && state.all.kv[row.id < 0 ? 'fixed_subs' : 'meal_tags'];
+  const id = tags && typeof tags === 'object' ? tags[Math.abs(row.id)] : null;
   return id === null || id === undefined ? null : subsOf(row.category).find((s) => s.id === String(id)) || null;
 }
-async function setSub(itemId, subId) {
-  const raw = state.all.kv.meal_tags && typeof state.all.kv.meal_tags === 'object' ? state.all.kv.meal_tags : {};
+/** Sous-catégorie d'une transaction, ou d'un montant fixe (fixed = true, numéro du montant fixe). */
+async function setSub(itemId, subId, fixed = false) {
+  const key = fixed ? 'fixed_subs' : 'meal_tags';
+  const raw = state.all.kv[key] && typeof state.all.kv[key] === 'object' ? state.all.kv[key] : {};
   if ((raw[itemId] === undefined ? null : String(raw[itemId])) === subId) return;
   const value = { ...raw };
   if (subId) value[itemId] = subId; else delete value[itemId];
-  state.all.kv.meal_tags = value;
-  await check(sb.from('kv_settings').upsert({ key: 'meal_tags', value }, { onConflict: 'user_id,key' }));
+  state.all.kv[key] = value;
+  await check(sb.from('kv_settings').upsert({ key, value }, { onConflict: 'user_id,key' }));
 }
 /** Enregistre la liste complète des catégories (partagée par tous les comptes et le PC). */
 async function saveCategories(list) {
@@ -1193,7 +1196,7 @@ function renderFixed() {
     return `<button type="button" class="row" data-fixed="${g.id}">
         ${catIcon(g.category)}
         <span class="body"><span class="title">${esc(g.title)}</span>
-          <span class="sub">${esc(g.category)}${transferNote(g) ? ` · ${esc(transferNote(g))}` : ''}${version ? ` · le ${version.day_of_month} du mois` : ''}</span></span>
+          <span class="sub">${esc(g.category)}${subOf({ id: -g.id, category: g.category }) ? ` · ${esc(subOf({ id: -g.id, category: g.category }).name)}` : ''}${transferNote(g) ? ` · ${esc(transferNote(g))}` : ''}${version ? ` · le ${version.day_of_month} du mois` : ''}</span></span>
         ${version ? `<span class="amount ${plus ? 'plus' : 'minus'}">${plus ? '+' : '−'}${euro(version.amount_cents)}</span>`
     : '<span class="sub">Pas actif ce mois-ci</span>'}
       </button>`;
@@ -1677,6 +1680,7 @@ async function saveFixed(group, f) {
   await check(sb.from('fixed_savings_transfers').delete().eq('group_id', groupId));
   if (f.accountId !== null) await check(sb.from('fixed_savings_transfers').insert({ group_id: groupId, account_id: f.accountId }));
   await setPocketOf('groups', groupId, f.accountId === null ? null : f.pocket);
+  await setSub(groupId, f.sub || null, true);
 }
 
 function fixedSheet(group = null) {
@@ -1706,6 +1710,10 @@ function fixedSheet(group = null) {
       ${pocketField(group ? pocketsData().groups[group.id] : null)}
     </div>
     ${targetField(group ? group.vers_compte_id : null)}
+    <div id="f-sub-box" data-initial="${group && subOf({ id: -group.id, category: group.category }) ? esc(subOf({ id: -group.id, category: group.category }).id) : ''}" hidden>
+      <label class="field">Sous-catégorie (facultatif)</label>
+      <div class="segmented sub" id="f-sub"></div>
+    </div>
     <label class="field" for="x-day">Jour du mois (1 à 31)</label>
     <input class="input" id="x-day" inputmode="numeric" value="${current ? current.day_of_month : 1}">
     <label class="field" for="x-start">${group ? 'Nouveau montant et jour à partir de' : 'À partir de'}</label>
@@ -1737,8 +1745,9 @@ function fixedSheet(group = null) {
       if (accountId === null) throw new Error('Crée d\'abord un compte épargne (onglet Épargne).');
     }
     const target = chosenTarget(form, accountId);
+    const subOn = form.querySelector('#f-sub .on');
     await saveFixed(group, { title, category: cat, kind: chosenKind, amount, start: start.slice(0, 7), day, accountId, target,
-                             pocket: accountId === null ? null : chosenPocket(form, amount) });
+                             pocket: accountId === null ? null : chosenPocket(form, amount), sub: subOn ? subOn.dataset.sub : null });
   });
   const form = $('#sheet-form');
   wirePickers(form);
@@ -1751,6 +1760,7 @@ function fixedSheet(group = null) {
       try {
         await check(sb.from('fixed_groups').delete().eq('id', group.id));
         await setPocketOf('groups', group.id, null);
+        await setSub(group.id, null, true);
         closeSheet();
         await refresh(true);
       } catch (e) {
