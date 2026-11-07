@@ -172,3 +172,19 @@ textarea.input { resize: vertical; font: inherit; }
 .check { display: flex; align-items: center; gap: 10px; margin-top: 14px; color: var(--text); font-size: 15px; }
 .check input { width: 20px; height: 20px; accent-color: var(--orange); }
 .metric .carry { display: block; font-size: 11px; margin-top: 3px; }
+.saving { background: var(--panel); border-radius: 14px; padding: 14px 16px; margin-bottom: 12px; }
+.saving-head { display: flex; align-items: center; gap: 10px; width: 100%; border: 0; background: transparent; color: var(--text); padding: 0; text-align: left; }
+.saving-head .title { flex: 1; font-weight: 700; font-size: 16px; }
+.saving-head .amount { font-size: 19px; font-weight: 700; color: var(--green); }
+.pocket { margin-top: 12px; }
+.pocket-line { display: flex; justify-content: space-between; font-size: 14px; }
+.pocket-line .pct { color: var(--muted); font-size: 12px; margin-left: 6px; }
+.pocket.rest .pocket-line { color: var(--muted); }
+.bar { height: 8px; border-radius: 4px; background: var(--card); margin-top: 6px; overflow: hidden; }
+.bar span { display: block; height: 100%; border-radius: 4px; background: var(--green); }
+.pocket.rest .bar span { background: var(--muted); }
+.pocket.minus .bar span { background: var(--red); }
+.pocket-edit { display: grid; grid-template-columns: 1fr 110px 40px; gap: 6px; margin-top: 8px; }
+.pocket-edit .input { margin: 0; }
+.pocket-edit button { border: 0; border-radius: 10px; background: var(--card); color: var(--red); font-size: 18px; }
+.secondary.wide { display: block; width: 100%; }
