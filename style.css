@@ -97,7 +97,7 @@ button.metric:active { background: var(--input); }
 
 .tabs {
   position: fixed; left: 0; right: 0; bottom: 0; z-index: 6;
-  display: grid; grid-template-columns: repeat(5, 1fr);
+  display: grid; grid-template-columns: repeat(6, 1fr);
   background: var(--panel); border-top: 1px solid #222;
   padding-bottom: var(--safe-bottom);
 }
@@ -215,3 +215,12 @@ textarea.input { resize: vertical; font: inherit; font-size: 16px; line-height: 
 .pocket-split.sub > span { padding-left: 18px; color: var(--muted); }
 .pocket-edit.sub-edit { grid-template-columns: 1fr 40px; }
 .input.color { height: 48px; padding: 4px 6px; }
+.row2 { display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: center; }
+.row2 .input { margin: 0; }
+.row.static { cursor: default; }
+.row .mini { border: 0; border-radius: 10px; background: var(--card); color: var(--green); font-weight: 700; padding: 8px 10px; margin-left: 8px; white-space: nowrap; }
+.file-btn { display: block; text-align: center; cursor: pointer; }
+.check-summary { display: flex; flex-direction: column; gap: 4px; background: var(--panel); border-radius: 14px; padding: 14px 16px; margin-top: 16px; font-size: 14px; }
+.check-summary .warn { color: var(--orange); } .check-summary .bad { color: var(--red); font-weight: 700; } .check-summary .good { color: var(--green); font-weight: 700; }
+.check-title { margin: 18px 0 6px; font-size: 15px; }
+.check-ok { margin-top: 16px; } .check-ok summary { color: var(--muted); cursor: pointer; }

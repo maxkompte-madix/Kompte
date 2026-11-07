@@ -778,6 +778,235 @@ async function saveFile(file) {
   toast(isIOS() ? 'Fichier prêt : touche « Partager » pour l’enregistrer.' : 'Fichier enregistré dans Téléchargements.');
 }
 
+// ------------------------------------------------- vérification avec la banque
+// Lecture d'un relevé téléchargé sur le site de la banque (OFX, QIF ou CSV), puis rapprochement automatique
+// avec les opérations de Kompte : même montant, dates à 4 jours près. Rien n'est enregistré par l'import.
+const checkState = { file: null, ops: null, balance: null, error: '' };
+
+/** Texte d'un fichier : UTF-8, sinon Windows-1252 (cas courant des banques françaises). */
+async function readBankFile(file) {
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  try { return new TextDecoder('utf-8', { fatal: true }).decode(bytes); }
+  catch (e) { return new TextDecoder('windows-1252').decode(bytes); }
+}
+/** « -1 234,56 », « 1234.56 », « 12,5 € » → centimes (null si illisible). */
+function bankCents(text) {
+  if (text === undefined || text === null) return null;
+  let s = String(text).replace(/[\s  €]/g, '').replace(/^\+/, '');
+  if (!s) return null;
+  if (s.includes(',') && s.includes('.')) s = s.lastIndexOf(',') > s.lastIndexOf('.') ? s.replace(/\./g, '').replace(',', '.') : s.replace(/,/g, '');
+  else s = s.replace(',', '.');
+  if (!/^-?\d+(\.\d+)?$/.test(s)) return null;
+  return Math.round(parseFloat(s) * 100);
+}
+/** « 06/11/2026 », « 06/11/26 », « 2026-11-06 », « 20261106 » → « 2026-11-06 » (null si illisible). */
+function bankDate(text) {
+  const s = String(text || '').trim();
+  let m = s.match(/^(\d{4})-?(\d{2})-?(\d{2})/);
+  if (m) return `${m[1]}-${m[2]}-${m[3]}`;
+  m = s.match(/^(\d{1,2})[/.-](\d{1,2})[/.-](\d{2,4})/);
+  if (m) {
+    const y = m[3].length === 2 ? `20${m[3]}` : m[3];
+    return `${y}-${m[2].padStart(2, '0')}-${m[1].padStart(2, '0')}`;
+  }
+  return null;
+}
+function parseOfx(text) {
+  const tag = (block, name) => { const m = block.match(new RegExp(`<${name}>([^<\\r\\n]*)`, 'i')); return m ? m[1].trim() : ''; };
+  const ops = [];
+  for (const block of text.split(/<STMTTRN>/i).slice(1)) {
+    const body = block.split(/<\/STMTTRN>/i)[0];
+    const date = bankDate(tag(body, 'DTPOSTED')), cents = bankCents(tag(body, 'TRNAMT'));
+    const label = [tag(body, 'NAME'), tag(body, 'MEMO')].filter(Boolean).join(' · ');
+    if (date && cents !== null) ops.push({ date, cents, label: label || 'Opération' });
+  }
+  let balance = null;
+  const ledger = text.split(/<LEDGERBAL>/i)[1];
+  if (ledger) {
+    const cents = bankCents(tag(ledger, 'BALAMT')), date = bankDate(tag(ledger, 'DTASOF'));
+    if (cents !== null) balance = { cents, date };
+  }
+  return { ops, balance };
+}
+function parseQif(text) {
+  const ops = [];
+  let cur = {};
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.trim();
+    if (!line) continue;
+    const code = line[0], value = line.slice(1).trim();
+    if (code === 'D') cur.date = bankDate(value.replace(/'/g, '/'));
+    else if (code === 'T' || code === 'U') cur.cents = bankCents(value);
+    else if (code === 'P') cur.label = value;
+    else if (code === 'M' && !cur.label) cur.label = value;
+    else if (code === '^') {
+      if (cur.date && cur.cents !== null && cur.cents !== undefined) ops.push({ date: cur.date, cents: cur.cents, label: cur.label || 'Opération' });
+      cur = {};
+    }
+  }
+  return { ops, balance: null };
+}
+function parseCsv(text) {
+  const lines = text.split(/\r?\n/).filter((l) => l.trim());
+  const delim = [';', '\t', ','].map((d) => [d, (lines.slice(0, 15).join('\n').match(new RegExp(d === '\t' ? '\t' : `\\${d}`, 'g')) || []).length])
+    .sort((a, b) => b[1] - a[1])[0][0];
+  const split = (line) => {
+    const out = []; let cell = '', quoted = false;
+    for (let i = 0; i < line.length; i++) {
+      const ch = line[i];
+      if (ch === '"') { if (quoted && line[i + 1] === '"') { cell += '"'; i++; } else quoted = !quoted; }
+      else if (ch === delim && !quoted) { out.push(cell.trim()); cell = ''; }
+      else cell += ch;
+    }
+    out.push(cell.trim());
+    return out;
+  };
+  const norm = (s) => s.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+  const headerAt = lines.findIndex((l) => /date/.test(norm(l)) && /(montant|debit|credit)/.test(norm(l)));
+  if (headerAt < 0) return { ops: [], balance: null };
+  const head = split(lines[headerAt]).map(norm);
+  const find = (...words) => head.findIndex((h) => words.some((w) => h.includes(w)));
+  const iDate = head.findIndex((h) => h.includes('date') && h.includes('op')) >= 0 ? head.findIndex((h) => h.includes('date') && h.includes('op')) : find('date');
+  const iLabel = find('libelle', 'operation', 'description', 'intitule');
+  const iAmount = find('montant');
+  const iDebit = find('debit'), iCredit = find('credit');
+  const ops = [];
+  for (const line of lines.slice(headerAt + 1)) {
+    const cells = split(line);
+    const date = bankDate(cells[iDate]);
+    if (!date) continue;
+    let cents = iAmount >= 0 ? bankCents(cells[iAmount]) : null;
+    if (cents === null && (iDebit >= 0 || iCredit >= 0)) {
+      const debit = bankCents(cells[iDebit]), credit = bankCents(cells[iCredit]);
+      if (debit) cents = -Math.abs(debit); else if (credit) cents = Math.abs(credit);
+    }
+    if (cents === null || cents === 0) continue;
+    ops.push({ date, cents, label: (iLabel >= 0 ? cells[iLabel] : '').replace(/\s+/g, ' ') || 'Opération' });
+  }
+  return { ops, balance: null };
+}
+function parseBankFile(text) {
+  if (/<OFX>|<STMTTRN>/i.test(text)) return parseOfx(text);
+  if (/^!Type:/im.test(text)) return parseQif(text);
+  return parseCsv(text);
+}
+
+/** Solde attendu par Kompte à la fin d'un jour donné (ce qui a déjà touché le compte). */
+function balanceAt(day) {
+  const now = getBalance();
+  if (now === null) return null;
+  const today = todayIso();
+  if (day >= today) return now;
+  let after = 0;
+  for (const e of balanceEvents(addDays(day, 1), addDays(today, 1))) after += signed(e);
+  return now - after;
+}
+/** Rapproche le relevé et Kompte. Les achats carte d'un même prélèvement forment une seule ligne, comme à la banque. */
+function matchBank(ops) {
+  const dates = ops.map((o) => o.date).sort();
+  const from = dates[0], to = dates[dates.length - 1];
+  const lines = [], cards = {};
+  for (const e of balanceEvents(addDays(from, -5), addDays(to, 6))) {
+    const debit = debitDate(e.row, e.due);
+    if (isCard(e.row)) {
+      const c = cards[debit] = cards[debit] || { date: debit, cents: 0, label: `Relevé carte du ${frDate(debit)}`, card: true };
+      c.cents += signed(e);
+    } else {
+      lines.push({ date: debit, cents: signed(e), label: e.row.title, row: e.row });
+    }
+  }
+  lines.push(...Object.values(cards));
+  const free = new Set(lines.map((_, i) => i));
+  const dayDiff = (a, b) => Math.abs((Date.parse(a) - Date.parse(b)) / 86400000);
+  const matched = [], bankOnly = [];
+  for (const op of [...ops].sort((a, b) => (a.date < b.date ? -1 : 1))) {
+    let best = -1;
+    for (const i of free) {
+      if (lines[i].cents !== op.cents || dayDiff(lines[i].date, op.date) > 4) continue;
+      if (best < 0 || dayDiff(lines[i].date, op.date) < dayDiff(lines[best].date, op.date)) best = i;
+    }
+    if (best >= 0) { free.delete(best); matched.push({ bank: op, kompte: lines[best] }); } else bankOnly.push(op);
+  }
+  const kompteOnly = [...free].map((i) => lines[i]).filter((l) => l.date >= from && l.date <= to)
+    .sort((a, b) => (a.date < b.date ? -1 : 1));
+  return { from, to, matched, bankOnly, kompteOnly };
+}
+
+function checkLine(date, label, cents, extra = '') {
+  return `<div class="row static"><span class="body"><span class="title">${esc(label)}</span>
+      <span class="sub">${frDate(date)}${extra}</span></span>
+      <span class="amount ${cents >= 0 ? 'plus' : 'minus'}">${cents >= 0 ? '+' : ''}${euro(cents)}</span></div>`;
+}
+
+function renderCheck() {
+  const balance = getBalance();
+  const st = checkState;
+  let result = '';
+  if (st.error) result = `<p class="error-text" style="text-align:center">${esc(st.error)}</p>`;
+  if (st.ops) {
+    const r = matchBank(st.ops);
+    const gap = st.balance && balance !== null ? st.balance.cents - balanceAt(st.balance.date || todayIso()) : null;
+    result += `
+      <div class="check-summary">
+        <span><b>${esc(st.file)}</b> · du ${frDate(r.from)} au ${frDate(r.to)}</span>
+        <span>✔ ${r.matched.length} opération${r.matched.length > 1 ? 's' : ''} retrouvée${r.matched.length > 1 ? 's' : ''}</span>
+        <span class="${r.bankOnly.length ? 'warn' : ''}">➕ ${r.bankOnly.length} à la banque, pas dans Kompte</span>
+        <span class="${r.kompteOnly.length ? 'warn' : ''}">⚠ ${r.kompteOnly.length} dans Kompte, pas à la banque</span>
+        ${gap === null ? '' : `<span class="${gap ? 'bad' : 'good'}">${gap ? `Écart de solde au ${frDate(st.balance.date || todayIso())} : ${gap > 0 ? '+' : ''}${euro(gap)}` : 'Solde identique à la banque ✔'}</span>`}
+      </div>
+      ${r.bankOnly.length ? `<h3 class="check-title">À la banque, pas dans Kompte</h3>
+        <div class="list">${r.bankOnly.map((o, i) => `<div class="row static"><span class="body"><span class="title">${esc(o.label)}</span>
+          <span class="sub">${frDate(o.date)}</span></span>
+          <span class="amount ${o.cents >= 0 ? 'plus' : 'minus'}">${o.cents >= 0 ? '+' : ''}${euro(o.cents)}</span>
+          <button type="button" class="mini" data-bank-add="${i}">+ Ajouter</button></div>`).join('')}</div>` : ''}
+      ${r.kompteOnly.length ? `<h3 class="check-title">Dans Kompte, pas à la banque</h3>
+        <p class="note">Oubli, doublon, ou opération pas encore passée à la banque : touche-la pour la vérifier.</p>
+        <div class="list">${r.kompteOnly.map((l) => l.row && l.row.id > 0
+          ? `<button type="button" class="row" data-item="${l.row.id}" data-due="${l.date}"><span class="body"><span class="title">${esc(l.label)}</span><span class="sub">${frDate(l.date)}</span></span><span class="amount ${l.cents >= 0 ? 'plus' : 'minus'}">${l.cents >= 0 ? '+' : ''}${euro(l.cents)}</span></button>`
+          : checkLine(l.date, l.label, l.cents, l.card ? ' · achats carte' : ' · montant fixe')).join('')}</div>` : ''}
+      ${r.matched.length ? `<details class="check-ok"><summary>Voir les ${r.matched.length} opérations retrouvées</summary>
+        <div class="list">${r.matched.map((m) => checkLine(m.bank.date, m.kompte.label, m.bank.cents, ` · banque : ${esc(m.bank.label)}`)).join('')}</div></details>` : ''}`;
+  }
+  view.innerHTML = `
+    <h2>Vérifier avec la banque</h2>
+    <label class="field" for="c-balance">Solde affiché par ta banque aujourd'hui (€)</label>
+    <div class="row2"><input class="input big" id="c-balance" inputmode="decimal" autocomplete="off" placeholder="0,00">
+      <button type="button" class="primary" id="c-compare">Comparer</button></div>
+    <p class="hint" id="c-balance-result">${balance === null ? 'Renseigne d’abord le solde de ton compte sur le tableau de bord.'
+      : `Kompte attend ${euro(balance)} (les achats carte comptent seulement quand ils sont prélevés).`}</p>
+    <label class="field">Importer un relevé de la banque</label>
+    <p class="hint">Sur le site de ta banque, télécharge tes opérations (format OFX de préférence, sinon CSV ou QIF),
+      puis choisis le fichier ici. Kompte retrouve chaque opération par son montant et sa date.</p>
+    <label class="secondary wide file-btn">Choisir un fichier…
+      <input type="file" id="c-file" accept=".ofx,.qfx,.qif,.csv,.txt,application/x-ofx,text/csv" hidden></label>
+    ${result}`;
+}
+
+/** Comparaison simple : solde tapé par l'utilisateur. */
+function compareBalance() {
+  const input = $('#c-balance'), out = $('#c-balance-result');
+  const balance = getBalance();
+  if (balance === null) return;
+  let typed;
+  try { typed = parseAmount(input.value); } catch (e) { out.textContent = 'Montant non compris.'; return; }
+  const gap = typed - balance;
+  out.innerHTML = gap === 0 ? '<b style="color:var(--green)">✔ Tout est juste : même solde que la banque.</b>'
+    : `<b style="color:var(--red)">Écart de ${gap > 0 ? '+' : ''}${euro(gap)}</b> : la banque affiche ${euro(typed)}, Kompte attend ${euro(balance)}.
+       ${gap < 0 ? 'Une dépense manque peut-être dans Kompte.' : 'Un revenu manque peut-être, ou une dépense a été notée en trop.'}
+       Importe un relevé pour la retrouver.`;
+}
+
+async function importBankFile(file) {
+  try {
+    const parsed = parseBankFile(await readBankFile(file));
+    Object.assign(checkState, { file: file.name, ops: parsed.ops.length ? parsed.ops : null, balance: parsed.balance,
+      error: parsed.ops.length ? '' : 'Aucune opération trouvée dans ce fichier : essaie le format OFX, ou envoie-moi un exemple.' });
+  } catch (e) {
+    Object.assign(checkState, { file: null, ops: null, balance: null, error: 'Fichier illisible.' });
+  }
+  render();
+}
+
 /** Enregistre le réglage « card » (partagé avec le PC). */
 async function saveCard(value) {
   state.all.kv.card = value;
@@ -1112,6 +1341,7 @@ function render() {
   if (state.tab === 'transactions') renderTransactions();
   else if (state.tab === 'fixed') renderFixed();
   else if (state.tab === 'savings') renderSavings();
+  else if (state.tab === 'check') renderCheck();
   else if (state.tab === 'account') renderAccount();
   else renderDashboard();
 }
@@ -2089,7 +2319,7 @@ function transactionSheet(item, preset = null) {
   const html = `
     <h3>${editing ? 'Modifier la transaction' : (preset && preset.heading) || 'Nouvelle transaction'}</h3>
     <label class="field" for="f-amount">Montant (€)</label>
-    <input class="input big" id="f-amount" inputmode="decimal" autocomplete="off" value="${editing ? amountText(item.total_cents) : ''}">
+    <input class="input big" id="f-amount" inputmode="decimal" autocomplete="off" value="${editing ? amountText(item.total_cents) : preset && preset.amount ? amountText(preset.amount) : ''}">
     <label class="field" for="f-title">Description</label>
     <input class="input" id="f-title" autocomplete="off" value="${editing ? esc(item.title) : esc((preset && preset.title) || '')}">
     <label class="field">Type</label>
@@ -2112,7 +2342,7 @@ function transactionSheet(item, preset = null) {
     ${cardConf(state.compte) ? `<label class="check" id="f-card-box"><input type="checkbox" id="f-card"
       ${(editing ? cardConf(state.compte).items.has(item.id) : true) ? 'checked' : ''}> Payé par carte (débit différé)</label>` : ''}
     <label class="field" for="f-date">${split ? 'Date du premier paiement' : 'Date'}</label>
-    <input class="input" id="f-date" type="date" value="${editing ? item.first_date : todayIso()}">
+    <input class="input" id="f-date" type="date" value="${editing ? item.first_date : (preset && preset.date) || todayIso()}">
     ${split ? `<label class="field" for="f-count">Nombre de mensualités</label>
       <input class="input" id="f-count" inputmode="numeric" value="${item.installments}">` : ''}
     ${editing && item.frequency !== 'Unique' ? `<p class="hint">Répétition : ${esc(item.frequency)}</p>` : ''}
@@ -2306,6 +2536,16 @@ document.addEventListener('click', async (event) => {
   if (t.closest('#add-saving')) { savingSheet(); return; }
   if (t.closest('#add-category')) { categorySheet(); return; }
   if (t.closest('#export-month')) { exportSheet(); return; }
+  if (t.closest('#c-compare')) { compareBalance(); return; }
+  const bankAdd = t.closest('[data-bank-add]');
+  if (bankAdd && checkState.ops) {
+    const op = matchBank(checkState.ops).bankOnly[Number(bankAdd.dataset.bankAdd)];
+    if (op) {
+      transactionSheet(null, { kind: op.cents < 0 ? 'Dépense' : 'Revenu', amount: Math.abs(op.cents), date: op.date,
+                               title: op.label.slice(0, 60), heading: 'Ajouter depuis la banque' });
+    }
+    return;
+  }
   const catRow = t.closest('[data-category]');
   if (catRow) { categorySheet(catRow.dataset.category); return; }
   const move = t.closest('[data-deposit], [data-withdraw]');
@@ -2362,6 +2602,7 @@ document.addEventListener('click', async (event) => {
 
 // Le début du mois s'applique tout de suite, puis part en ligne.
 document.addEventListener('change', async (event) => {
+  if (event.target.id === 'c-file' && event.target.files && event.target.files[0]) { importBankFile(event.target.files[0]); return; }
   if (['card-enabled', 'card-cutoff', 'card-debit'].includes(event.target.id)) {
     const raw = (state.all.kv.card && typeof state.all.kv.card === 'object') ? state.all.kv.card : {};
     const mine = raw[state.compte] || { enabled: false, cutoff: 19, debit: 31, items: [] };
