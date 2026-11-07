@@ -443,10 +443,30 @@ function categorySheet(original = null) {
 // ------------------------------------------------- budgets par catégorie (= kompte.py)
 // Réglage partagé « budgets » : {compte: {catégorie: montant mensuel}} ; « Catégorie|id » vise une sous-catégorie.
 // Dépensé = dépenses du mois déjà passées.
-function budgetsOf(compte) {
+// Historique : chaque budget est une liste [[mois de début, montant]] (0 = plus de budget) ; une modification
+// vaut à partir du mois en cours, les mois passés gardent le leur. Ancien format (un nombre) = depuis BUDGETS_SINCE.
+// Report : ce qui n'est pas dépensé s'ajoute au mois suivant (cumulé) ; un dépassement n'est pas retiré.
+const BUDGETS_SINCE = '2026-11';
+function budgetVersions(compte) {
   const raw = state.all && state.all.kv.budgets;
   const mine = raw && typeof raw === 'object' && raw[compte] && typeof raw[compte] === 'object' ? raw[compte] : {};
-  return Object.fromEntries(Object.entries(mine).filter(([, v]) => Number.isInteger(v) && v > 0));
+  const out = {};
+  for (const [key, v] of Object.entries(mine)) {
+    const list = Number.isInteger(v) ? [[BUDGETS_SINCE, v]] : Array.isArray(v) ? v.filter((x) => Array.isArray(x)
+      && typeof x[0] === 'string' && /^\d{4}-\d{2}$/.test(x[0]) && Number.isInteger(x[1]) && x[1] >= 0) : [];
+    if (list.length) out[key] = [...list].sort((a, b) => (a[0] < b[0] ? -1 : 1));
+  }
+  return out;
+}
+/** Budget de base d'un mois (0 si aucun). */
+function budgetAt(versions, ym) {
+  let amount = 0;
+  for (const [start, cents] of versions) if (start <= ym) amount = cents;
+  return amount;
+}
+/** Budgets en vigueur pour ce mois : {clé: montant}. */
+function budgetsOf(compte, ym = currentMonth()) {
+  return Object.fromEntries(Object.entries(budgetVersions(compte)).map(([k, v]) => [k, budgetAt(v, ym)]).filter(([, c]) => c > 0));
 }
 function budgetLabel(key) {
   const i = key.indexOf('|');
@@ -463,9 +483,8 @@ function budgetKeys() {
   }
   return keys;
 }
-/** [{key, label, budget, spent}] pour le mois choisi, dans l'ordre des catégories. */
-function budgetRows(ym) {
-  const budgets = budgetsOf(state.compte);
+/** Dépenses déjà passées d'un mois, par catégorie et « catégorie|sous-catégorie ». */
+function budgetSpent(ym) {
   const today = todayIso();
   const spent = {};
   for (const e of summary(ym).events) {
@@ -477,9 +496,30 @@ function budgetRows(ym) {
       spent[key] = (spent[key] || 0) + e.amount;
     }
   }
+  return spent;
+}
+/** [{key, label, base, carry, budget (= base + report), spent}] pour le mois choisi, dans l'ordre des catégories. */
+function budgetRows(ym) {
+  const versions = budgetVersions(state.compte);
   const order = budgetKeys();
-  return Object.keys(budgets).filter((k) => order.includes(k)).sort((a, b) => order.indexOf(a) - order.indexOf(b))
-    .map((key) => ({ key, label: budgetLabel(key), budget: budgets[key], spent: spent[key] || 0 }));
+  const spentCache = {};
+  const spentOf = (m) => (spentCache[m] = spentCache[m] || budgetSpent(m));
+  const rows = [];
+  for (const key of Object.keys(versions).filter((k) => order.includes(k)).sort((a, b) => order.indexOf(a) - order.indexOf(b))) {
+    const list = versions[key];
+    const base = budgetAt(list, ym);
+    if (!base) continue;
+    // Report cumulé depuis le premier mois du budget (jamais avant BUDGETS_SINCE).
+    let carry = 0;
+    let m = list[0][0] > BUDGETS_SINCE ? list[0][0] : BUDGETS_SINCE;
+    while (m < ym) {
+      const b = budgetAt(list, m);
+      carry = b ? Math.max(0, b + carry - (spentOf(m)[key] || 0)) : 0;
+      m = nextMonth(m);
+    }
+    rows.push({ key, label: budgetLabel(key), base, carry, budget: base + carry, spent: spentOf(ym)[key] || 0 });
+  }
+  return rows;
 }
 /** Barre de budget : verte, orange à partir de 80 %, rouge au-delà du budget. */
 function budgetBar(spent, budget) {
@@ -516,12 +556,13 @@ function budgetsSheet() {
         <div class="pocket-line"><span>${r.key.includes('|') ? '↳ ' + esc(r.label) : catIcon(r.key) + esc(r.label)}</span>
           <span>${euro(r.spent)} <span class="pct">/ ${euro(r.budget)}</span></span></div>
         ${budgetBar(r.spent, r.budget)}
-        <small style="color:var(${rest < 0 ? '--red' : '--muted'})">${rest < 0 ? `Dépassé de ${euro(-rest)}` : `Reste ${euro(rest)}`}</small>
+        <small style="color:var(${rest < 0 ? '--red' : '--muted'})">${rest < 0 ? `Dépassé de ${euro(-rest)}` : `Reste ${euro(rest)}`}${r.carry ? ` · dont report ${euro(r.carry)}` : ''}</small>
       </div>`;
   }).join('');
   openSheet(`
     <h3>Budgets · ${monthLabel(ym)}</h3>
-    <p class="hint" style="text-align:center">Dépenses déjà passées ce mois-ci, comparées à ton budget.</p>
+    <p class="hint" style="text-align:center">Dépenses déjà passées ce mois-ci, comparées à ton budget.
+      Ce qui n'est pas dépensé s'ajoute au mois suivant (report).</p>
     ${lines || '<p class="empty">Aucun budget défini.</p>'}
     <button type="button" class="primary wide" id="b-edit" style="margin-top:14px">${rows.length ? 'Modifier les budgets' : 'Définir mes budgets'}</button>
     <div class="actions"><button type="button" class="secondary" data-close>Fermer</button></div>`, async () => {});
@@ -529,25 +570,30 @@ function budgetsSheet() {
 }
 
 function budgetEditSheet() {
-  const budgets = budgetsOf(state.compte);
+  const now = currentMonth();
+  const budgets = budgetsOf(state.compte, now);
   const fields = budgetKeys().map((key) => `<div class="pocket-split ${key.includes('|') ? 'sub' : ''}">
       <span>${key.includes('|') ? '↳ ' + esc(budgetLabel(key)) : catIcon(key) + esc(key)}</span>
       <input class="input" inputmode="decimal" autocomplete="off" placeholder="—" data-budget="${esc(key)}"
         value="${budgets[key] ? amountText(budgets[key]) : ''}"></div>`).join('');
   openSheet(`
     <h3>Mes budgets mensuels</h3>
-    <p class="hint" style="text-align:center">Un montant par mois pour ${esc(compteName(state.compte))}. Laisse vide : pas de budget.</p>
+    <p class="hint" style="text-align:center">Un montant par mois pour ${esc(compteName(state.compte))}. Laisse vide : pas de budget.<br>
+      Les changements valent à partir de ${monthLabel(now).toLowerCase()} ; les mois passés gardent leurs budgets.</p>
     ${fields}
     <p class="error-text"></p>
     <div class="actions">
       <button type="button" class="secondary" data-close>Annuler</button>
       <button type="submit" class="primary">Enregistrer</button>
     </div>`, async (form) => {
-    const mine = {};
+    const mine = budgetVersions(state.compte);
     for (const input of form.querySelectorAll('input[data-budget]')) {
-      if (!input.value.trim()) continue;
-      const cents = positiveCents(input.value);
-      mine[input.dataset.budget] = cents;
+      const key = input.dataset.budget;
+      const cents = input.value.trim() ? positiveCents(input.value) : 0;
+      const list = mine[key] || [];
+      if (budgetAt(list, now) === cents) continue;
+      // Nouveau montant à partir de ce mois : les mois d'avant restent intacts.
+      mine[key] = [...list.filter(([start]) => start < now), [now, cents]];
     }
     const raw = state.all.kv.budgets && typeof state.all.kv.budgets === 'object' ? state.all.kv.budgets : {};
     const value = { ...raw, [state.compte]: mine };
