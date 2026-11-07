@@ -305,6 +305,33 @@ function paySheet(reminder) {
   });
 }
 
+// ------------------------------------------- repas : midi ou restaurant (= kompte.py)
+// Réglage partagé « meal_tags » : {transaction: 'midi' | 'resto'}, pour la catégorie Alimentation.
+const MEALS = { midi: 'Repas du midi', resto: 'Restaurant' };
+const MEAL_CATEGORY = 'Alimentation';
+function mealOf(itemId) {
+  const tags = state.all && state.all.kv.meal_tags;
+  const tag = tags && typeof tags === 'object' ? tags[itemId] : null;
+  return MEALS[tag] ? tag : null;
+}
+async function setMeal(itemId, tag) {
+  const raw = state.all.kv.meal_tags && typeof state.all.kv.meal_tags === 'object' ? state.all.kv.meal_tags : {};
+  if ((raw[itemId] || null) === tag) return;
+  const value = { ...raw };
+  if (tag) value[itemId] = tag; else delete value[itemId];
+  state.all.kv.meal_tags = value;
+  await check(sb.from('kv_settings').upsert({ key: 'meal_tags', value }, { onConflict: 'user_id,key' }));
+}
+/** Totaux du mois : {midi, resto} (dépenses Alimentation marquées). */
+function mealTotals(events) {
+  const totals = { midi: 0, resto: 0 };
+  for (const e of events) {
+    const tag = e.row.id > 0 && e.row.kind === 'Dépense' && e.row.category === MEAL_CATEGORY ? mealOf(e.row.id) : null;
+    if (tag) totals[tag] += e.amount;
+  }
+  return totals;
+}
+
 /** Enregistre le réglage « card » (partagé avec le PC). */
 async function saveCard(value) {
   state.all.kv.card = value;
@@ -707,6 +734,7 @@ function eventRow(e) {
     when += ' · fixe';
     if (r.override !== null && r.override !== undefined) when += ' (modifié ce mois)';
   }
+  if (r.id > 0 && r.category === MEAL_CATEGORY && mealOf(r.id)) when += ` · ${MEALS[mealOf(r.id)].toLowerCase()}`;
   const plus = r.kind === 'Revenu';
   return `<button type="button" class="row" data-item="${r.id}" data-due="${e.due}">
       ${catIcon(r.category)}
@@ -723,6 +751,7 @@ function renderDashboard() {
   const carry = balance === null || state.selected !== currentMonth() ? null : carryOver(balance);
   const ym = state.selected;
   const { income, out, paid, events } = summary(ym);
+  const meals = mealTotals(events);
   const isToday = ym === currentMonth();
   const today = todayIso();
   // Seulement ce qui a déjà eu lieu, les 10 plus récentes (le détail est dans Transactions).
@@ -754,6 +783,8 @@ function renderDashboard() {
       <div class="metric"><small>Bilan du mois</small><b style="color:var(--blue)">${euro(income - out)}</b>
         ${carry === null ? '' : `<span class="carry" style="color:var(${carry >= 0 ? '--green' : '--red'})">Report du mois dernier : ${carry > 0 ? '+' : ''}${euro(carry)}</span>`}</div>
     </div>
+    ${meals.midi || meals.resto ? `<div class="meals"><small>Alimentation ce mois-ci</small>
+      <span>Repas du midi <b>${euro(meals.midi)}</b></span><span>Restaurant <b>${euro(meals.resto)}</b></span></div>` : ''}
     <button type="button" class="notes-btn" id="notes">Notes${state.data.notes.length ? ` (${state.data.notes.length})` : ''}</button>
     <h2>Dernières opérations</h2>
     <div class="list">${done.map(eventRow).join('') || '<p class="empty">Aucune opération passée ce mois-ci.</p>'}</div>
@@ -891,6 +922,7 @@ function renderTransactions() {
     let details = `${r.category} · ${frDate(e.due)}`;
     if (transferNote(r)) details += ` · ${transferNote(r)}`;
     if (isCard(r)) details += ' · carte';
+    if (r.id > 0 && r.category === MEAL_CATEGORY && mealOf(r.id)) details += ` · ${MEALS[mealOf(r.id)].toLowerCase()}`;
     if (debitDate(r, e.due) !== e.due) details += ` · débit le ${frDate(debitDate(r, e.due))}`;
     if (r.id < 0) details += ' · fixe';
     else if (r.installments > 1) {
@@ -1342,7 +1374,18 @@ function wirePickers(form, split = false) {
     const pocketLabel = form.querySelector('#f-pocket-label');
     if (pocketLabel) pocketLabel.textContent = out ? 'Prendre dans les poches' : 'Répartir dans les poches';
     form.dispatchEvent(new Event('pocket-kind'));
+    const meal = form.querySelector('#f-meal-box');
+    if (meal) meal.hidden = !(c === MEAL_CATEGORY && k === 'Dépense');
   };
+  const mealBox = form.querySelector('#f-meal');
+  if (mealBox) {
+    mealBox.addEventListener('click', (e) => {
+      const b = e.target.closest('button[data-meal]');
+      if (!b) return;
+      const on = !b.classList.contains('on'); // toucher à nouveau : décocher
+      mealBox.querySelectorAll('button').forEach((x) => x.classList.toggle('on', on && x === b));
+    });
+  }
   wirePocket(form);
   form.querySelector('#f-kind').addEventListener('click', (e) => {
     const b = e.target.closest('button[data-kind]');
@@ -1601,6 +1644,12 @@ function transactionSheet(item, preset = null) {
       <select class="input" id="f-account">${accountOptions(transfer ? transfer.account_id : null)}</select>
       ${pocketField(editing ? pocketsData().items[item.id] : null)}
     </div>
+    <div id="f-meal-box" hidden>
+      <label class="field">Type de repas (facultatif)</label>
+      <div class="segmented meal" id="f-meal">
+        ${Object.entries(MEALS).map(([tag, label]) => `<button type="button" data-meal="${tag}" class="${editing && mealOf(item.id) === tag ? 'on' : ''}">${label}</button>`).join('')}
+      </div>
+    </div>
     ${targetField(editing ? item.vers_compte_id : null)}
     ${cardConf(state.compte) ? `<label class="check" id="f-card-box"><input type="checkbox" id="f-card"
       ${(editing ? cardConf(state.compte).items.has(item.id) : true) ? 'checked' : ''}> Payé par carte (débit différé)</label>` : ''}
@@ -1642,11 +1691,14 @@ function transactionSheet(item, preset = null) {
     const cardBox = form.querySelector('#f-card');
     const paidByCard = !!cardBox && cardBox.checked && kindValue === 'Dépense' && accountId === null && fields.vers_compte_id === null;
     const pocketSplit = accountId === null ? null : chosenPocket(form, total); // vérifiée avant d'enregistrer
+    const mealOn = form.querySelector('#f-meal .on');
+    const meal = catValue === MEAL_CATEGORY && kindValue === 'Dépense' && mealOn ? mealOn.dataset.meal : null;
     if (editing) {
       await check(sb.from('items').update({ ...fields, installments: n, frequency: item.frequency }).eq('id', item.id));
       await check(sb.from('savings_transfers').delete().eq('item_id', item.id));
       if (accountId !== null) await check(sb.from('savings_transfers').insert({ item_id: item.id, account_id: accountId }));
       await setPocketOf('items', item.id, pocketSplit);
+      await setMeal(item.id, meal);
       await check(sb.from('confirmations').delete().eq('item_id', item.id));
       if (cardBox) { const value = cardWithItem(item.id, paidByCard); if (value) await saveCard(value); }
     } else {
@@ -1654,6 +1706,7 @@ function transactionSheet(item, preset = null) {
       await check(sb.from('items').insert({ id, compte_id: state.compte, ...fields, installments: 1, frequency: 'Unique', created_at: utcStamp() }));
       if (accountId !== null) await check(sb.from('savings_transfers').insert({ item_id: id, account_id: accountId }));
       if (pocketSplit !== null) await setPocketOf('items', id, pocketSplit);
+      if (meal) await setMeal(id, meal);
       if (paidByCard) { const value = cardWithItem(id, true); if (value) await saveCard(value); }
     }
   });
@@ -1667,6 +1720,7 @@ function transactionSheet(item, preset = null) {
       try {
         await check(sb.from('items').delete().eq('id', item.id));
         await setPocketOf('items', item.id, null);
+        await setMeal(item.id, null);
         const value = cardWithItem(item.id, false);
         if (value) await saveCard(value);
         closeSheet();
