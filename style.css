@@ -203,3 +203,12 @@ textarea.input { resize: vertical; font: inherit; font-size: 16px; line-height: 
 .meals { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 16px; background: var(--panel); border-radius: 14px; padding: 12px 16px; margin-top: 10px; font-size: 14px; }
 .meals small { width: 100%; color: var(--muted); font-size: 11px; font-weight: 700; letter-spacing: .4px; text-transform: uppercase; }
 .meals b { color: var(--orange); margin-left: 4px; }
+.metric.wide { grid-column: 1 / -1; text-align: left; border: 0; color: var(--text); width: 100%; font: inherit; }
+.metric.wide .of { font-size: 13px; font-weight: 400; color: var(--muted); }
+.metric.wide .bar { margin-top: 8px; background: var(--input); }
+.budget { margin-top: 14px; }
+.budget.sub { margin-left: 18px; }
+.budget .pocket-line > span:first-child { display: flex; align-items: center; gap: 8px; }
+.budget small { display: block; margin-top: 4px; font-size: 12px; }
+.pocket-split > span { display: flex; align-items: center; gap: 8px; }
+.pocket-split.sub > span { padding-left: 18px; color: var(--muted); }

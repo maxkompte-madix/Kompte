@@ -332,6 +332,120 @@ function mealTotals(events) {
   return totals;
 }
 
+// ------------------------------------------------- budgets par catégorie (= kompte.py)
+// Réglage partagé « budgets » : {compte: {catégorie: montant mensuel}} ; « Alimentation|midi » et
+// « Alimentation|resto » visent seulement les repas marqués. Dépensé = dépenses du mois déjà passées.
+function budgetsOf(compte) {
+  const raw = state.all && state.all.kv.budgets;
+  const mine = raw && typeof raw === 'object' && raw[compte] && typeof raw[compte] === 'object' ? raw[compte] : {};
+  return Object.fromEntries(Object.entries(mine).filter(([, v]) => Number.isInteger(v) && v > 0));
+}
+function budgetLabel(key) {
+  const [cat, meal] = key.split('|');
+  return meal ? `${cat} · ${MEALS[meal] || meal}` : cat;
+}
+/** Catégories qui peuvent avoir un budget : toutes sauf Revenus, et les deux types de repas. */
+function budgetKeys() {
+  const keys = [];
+  for (const c of categories()) {
+    if (c.name === 'Revenus') continue;
+    keys.push(c.name);
+    if (c.name === MEAL_CATEGORY) keys.push(...Object.keys(MEALS).map((m) => `${MEAL_CATEGORY}|${m}`));
+  }
+  return keys;
+}
+/** [{key, label, budget, spent}] pour le mois choisi, dans l'ordre des catégories. */
+function budgetRows(ym) {
+  const budgets = budgetsOf(state.compte);
+  const today = todayIso();
+  const spent = {};
+  for (const e of summary(ym).events) {
+    if (e.row.kind !== 'Dépense' || e.due > today) continue;
+    spent[e.row.category] = (spent[e.row.category] || 0) + e.amount;
+    if (e.row.id > 0 && e.row.category === MEAL_CATEGORY && mealOf(e.row.id)) {
+      const key = `${MEAL_CATEGORY}|${mealOf(e.row.id)}`;
+      spent[key] = (spent[key] || 0) + e.amount;
+    }
+  }
+  const order = budgetKeys();
+  return Object.keys(budgets).sort((a, b) => order.indexOf(a) - order.indexOf(b))
+    .map((key) => ({ key, label: budgetLabel(key), budget: budgets[key], spent: spent[key] || 0 }));
+}
+/** Barre de budget : verte, orange à partir de 80 %, rouge au-delà du budget. */
+function budgetBar(spent, budget) {
+  const ratio = budget > 0 ? spent / budget : 0;
+  const color = ratio > 1 ? '--red' : ratio >= 0.8 ? '--orange' : '--green';
+  return `<div class="bar"><span style="width:${Math.min(100, Math.round(ratio * 100))}%;background:var(${color})"></span></div>`;
+}
+/** Case du tableau de bord : les sous-budgets ne comptent pas dans le total (déjà dans Alimentation). */
+function budgetTile(ym) {
+  const rows = budgetRows(ym);
+  if (!rows.length) {
+    return `<button type="button" class="metric wide" id="budgets"><small>Budgets du mois ›</small>
+      <b style="font-size:15px">Définir mes budgets par catégorie</b></button>`;
+  }
+  const main = rows.filter((r) => !r.key.includes('|'));
+  const spent = main.reduce((t, r) => t + r.spent, 0);
+  const budget = main.reduce((t, r) => t + r.budget, 0);
+  const over = rows.filter((r) => r.spent > r.budget).length;
+  return `<button type="button" class="metric wide" id="budgets">
+      <small>Budgets du mois ›</small>
+      <b>${euro(spent)} <span class="of">sur ${euro(budget)}</span></b>
+      ${budgetBar(spent, budget)}
+      <span class="carry" style="color:var(${over ? '--red' : '--muted'})">${over ? `${over} budget${over > 1 ? 's' : ''} dépassé${over > 1 ? 's' : ''}`
+        : `Reste ${euro(Math.max(0, budget - spent))}`}</span>
+    </button>`;
+}
+
+function budgetsSheet() {
+  const ym = state.selected;
+  const rows = budgetRows(ym);
+  const lines = rows.map((r) => {
+    const rest = r.budget - r.spent;
+    return `<div class="budget ${r.key.includes('|') ? 'sub' : ''}">
+        <div class="pocket-line"><span>${r.key.includes('|') ? '↳ ' + esc(MEALS[r.key.split('|')[1]] || r.label) : catIcon(r.key) + esc(r.label)}</span>
+          <span>${euro(r.spent)} <span class="pct">/ ${euro(r.budget)}</span></span></div>
+        ${budgetBar(r.spent, r.budget)}
+        <small style="color:var(${rest < 0 ? '--red' : '--muted'})">${rest < 0 ? `Dépassé de ${euro(-rest)}` : `Reste ${euro(rest)}`}</small>
+      </div>`;
+  }).join('');
+  openSheet(`
+    <h3>Budgets · ${monthLabel(ym)}</h3>
+    <p class="hint" style="text-align:center">Dépenses déjà passées ce mois-ci, comparées à ton budget.</p>
+    ${lines || '<p class="empty">Aucun budget défini.</p>'}
+    <button type="button" class="primary wide" id="b-edit" style="margin-top:14px">${rows.length ? 'Modifier les budgets' : 'Définir mes budgets'}</button>
+    <div class="actions"><button type="button" class="secondary" data-close>Fermer</button></div>`, async () => {});
+  $('#sheet-form').querySelector('#b-edit').addEventListener('click', budgetEditSheet);
+}
+
+function budgetEditSheet() {
+  const budgets = budgetsOf(state.compte);
+  const fields = budgetKeys().map((key) => `<div class="pocket-split ${key.includes('|') ? 'sub' : ''}">
+      <span>${key.includes('|') ? '↳ ' + esc(MEALS[key.split('|')[1]]) : catIcon(key) + esc(key)}</span>
+      <input class="input" inputmode="decimal" autocomplete="off" placeholder="—" data-budget="${esc(key)}"
+        value="${budgets[key] ? amountText(budgets[key]) : ''}"></div>`).join('');
+  openSheet(`
+    <h3>Mes budgets mensuels</h3>
+    <p class="hint" style="text-align:center">Un montant par mois pour ${esc(compteName(state.compte))}. Laisse vide : pas de budget.</p>
+    ${fields}
+    <p class="error-text"></p>
+    <div class="actions">
+      <button type="button" class="secondary" data-close>Annuler</button>
+      <button type="submit" class="primary">Enregistrer</button>
+    </div>`, async (form) => {
+    const mine = {};
+    for (const input of form.querySelectorAll('input[data-budget]')) {
+      if (!input.value.trim()) continue;
+      const cents = positiveCents(input.value);
+      mine[input.dataset.budget] = cents;
+    }
+    const raw = state.all.kv.budgets && typeof state.all.kv.budgets === 'object' ? state.all.kv.budgets : {};
+    const value = { ...raw, [state.compte]: mine };
+    state.all.kv.budgets = value;
+    await check(sb.from('kv_settings').upsert({ key: 'budgets', value }, { onConflict: 'user_id,key' }));
+  });
+}
+
 /** Enregistre le réglage « card » (partagé avec le PC). */
 async function saveCard(value) {
   state.all.kv.card = value;
@@ -751,7 +865,6 @@ function renderDashboard() {
   const carry = balance === null || state.selected !== currentMonth() ? null : carryOver(balance);
   const ym = state.selected;
   const { income, out, paid, events } = summary(ym);
-  const meals = mealTotals(events);
   const isToday = ym === currentMonth();
   const today = todayIso();
   // Seulement ce qui a déjà eu lieu, les 10 plus récentes (le détail est dans Transactions).
@@ -782,9 +895,8 @@ function renderDashboard() {
       ${metric('Déjà dépensé', paid, 'var(--text)')}
       <div class="metric"><small>Bilan du mois</small><b style="color:var(--blue)">${euro(income - out)}</b>
         ${carry === null ? '' : `<span class="carry" style="color:var(${carry >= 0 ? '--green' : '--red'})">Report du mois dernier : ${carry > 0 ? '+' : ''}${euro(carry)}</span>`}</div>
+      ${budgetTile(ym)}
     </div>
-    ${meals.midi || meals.resto ? `<div class="meals"><small>Alimentation ce mois-ci</small>
-      <span>Repas du midi <b>${euro(meals.midi)}</b></span><span>Restaurant <b>${euro(meals.resto)}</b></span></div>` : ''}
     <button type="button" class="notes-btn" id="notes">Notes${state.data.notes.length ? ` (${state.data.notes.length})` : ''}</button>
     <h2>Dernières opérations</h2>
     <div class="list">${done.map(eventRow).join('') || '<p class="empty">Aucune opération passée ce mois-ci.</p>'}</div>
@@ -1825,6 +1937,7 @@ document.addEventListener('click', async (event) => {
   }
   if (t.closest('#balance')) { balanceSheet(); return; }
   if (t.closest('#upcoming')) { upcomingSheet(); return; }
+  if (t.closest('#budgets')) { budgetsSheet(); return; }
   if (t.closest('#notes')) { notesSheet(); return; }
   if (t.closest('#add-note')) { noteSheet(null); return; }
   const noteRow = t.closest('[data-note]');
