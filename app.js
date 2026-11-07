@@ -750,16 +750,32 @@ function exportSheet() {
     const name = `Kompte ${compteName(state.compte)} ${ym}.xlsx`.replace(/[\\/:*?"<>|]/g, '-');
     const file = new File([monthWorkbook(ym)], name,
       { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
-    // iPhone : la feuille de partage permet « Enregistrer dans Fichiers », Mail, etc.
-    if (navigator.canShare && navigator.canShare({ files: [file] })) {
-      try { await navigator.share({ files: [file], title: name }); } catch (e) { if (e.name !== 'AbortError') throw e; }
-    } else {
-      const url = URL.createObjectURL(file);
-      const a = document.createElement('a');
-      a.href = url; a.download = name; document.body.appendChild(a); a.click(); a.remove();
-      setTimeout(() => URL.revokeObjectURL(url), 10000);
-    }
+    await saveFile(file);
   });
+}
+
+/** iPhone / iPad (y compris un iPad qui se présente comme un Mac). */
+function isIOS() {
+  return /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+}
+/** Donne un fichier à l'utilisateur. iPhone : feuille de partage (« Enregistrer dans Fichiers », Mail…).
+    Android et ordinateur : téléchargement, car Chrome refuse de partager un fichier Excel (« Permission denied »).
+    Si le partage est refusé, on télécharge quand même. */
+async function saveFile(file) {
+  if (isIOS() && navigator.canShare && navigator.canShare({ files: [file] })) {
+    try {
+      await navigator.share({ files: [file], title: file.name });
+      return;
+    } catch (e) {
+      if (e.name === 'AbortError') return; // partage annulé par l'utilisateur
+    }
+  }
+  const url = URL.createObjectURL(file);
+  const a = document.createElement('a');
+  a.href = url; a.download = file.name; a.rel = 'noopener';
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 60000);
+  toast(isIOS() ? 'Fichier prêt : touche « Partager » pour l’enregistrer.' : 'Fichier enregistré dans Téléchargements.');
 }
 
 /** Enregistre le réglage « card » (partagé avec le PC). */
