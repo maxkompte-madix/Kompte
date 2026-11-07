@@ -1279,6 +1279,45 @@ function balanceOf(compte) {
   try { return getBalance(); } finally { state.data = data; state.compte = current; }
 }
 
+// ------------------------------------------- « Combien il me reste ? » (Siri, supabase/combien_reste.sql)
+// Le téléphone dépose dans le réglage « siri » le disponible et les budgets de chaque compte, calculés comme à
+// l'écran. La fonction SQL lit ce résumé et y retire elle-même les dépenses ajoutées depuis (id > max_item).
+/** JSON aux clés triées : Supabase renvoie les objets dans un autre ordre, la comparaison doit l'ignorer. */
+function stableJson(v) {
+  if (Array.isArray(v)) return `[${v.map(stableJson).join(',')}]`;
+  if (v && typeof v === 'object') return `{${Object.keys(v).sort().map((k) => `${JSON.stringify(k)}:${stableJson(v[k])}`).join(',')}}`;
+  return JSON.stringify(v);
+}
+function siriSummary() {
+  const out = { max_item: state.all.items.reduce((m, i) => Math.max(m, i.id), 0) };
+  const [data, current] = [state.data, state.compte];
+  try {
+    for (const c of state.all.comptes) {
+      state.compte = c.id;
+      state.data = scoped(c.id);
+      const ym = currentMonth();
+      const [start, end] = monthPeriod(ym);
+      const entry = { day: todayIso(), start, end,
+                      budgets: budgetRows(ym).map((r) => ({ key: r.key, label: r.label, budget: r.budget, spent: r.spent })) };
+      const balance = getBalance();
+      if (balance !== null) [entry.available, entry.until] = availableMoney(balance);
+      out[c.id] = entry;
+    }
+  } finally {
+    state.data = data;
+    state.compte = current;
+  }
+  return out;
+}
+/** Met le résumé à jour en ligne s'il a changé (une fois par jour au plus, sauf nouvelle opération). */
+async function saveSiriSummary() {
+  if (!state.all || !state.all.comptes.length) return;
+  const value = siriSummary();
+  if (stableJson(value) === stableJson(state.all.kv.siri)) return;
+  state.all.kv.siri = value;
+  await check(sb.from('kv_settings').upsert({ key: 'siri', value }, { onConflict: 'user_id,key' }));
+}
+
 async function loadAll() {
   const version = await remoteVersion();
   const names = Object.keys(TABLES);
@@ -1303,6 +1342,7 @@ async function refresh(force = false) {
       render();
     }
     state.syncError = false;
+    try { await saveSiriSummary(); } catch (e) { /* facultatif : ne bloque jamais la synchro */ }
     if (!state.checked) { state.checked = true; if (state.tab === 'dashboard') render(); }
     const now = new Date();
     setSync(`À jour · ${pad(now.getHours())}:${pad(now.getMinutes())}`);
