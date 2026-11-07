@@ -372,7 +372,8 @@ function quickCalc(line) {
   return `${sign}${Math.floor(cents / 100)}${cents % 100 ? `,${pad(cents % 100)}` : ''}`;
 }
 
-function isSavings(cat, kind) { return kind === 'Dépense' && category(cat).savings; }
+/** Opération sur un compte épargne : une dépense y verse de l'argent, un revenu en retire. */
+function isSavings(cat, kind) { return (kind === 'Dépense' || kind === 'Revenu') && category(cat).savings; }
 
 // ----------------------------------------------------- calculs (= kompte.py)
 function fixedEvents(start, end) {
@@ -1040,7 +1041,7 @@ function accountSplit(accountId) {
 /** Répartition entre les poches, sous le compte épargne d'un virement (caché si le compte n'a pas de poche). */
 function pocketField(initial) {
   return `<div id="f-pocket-box" data-initial="${esc(JSON.stringify(initial === undefined ? null : initial))}" hidden>
-      <label class="field">Répartir dans les poches</label>
+      <label class="field" id="f-pocket-label">Répartir dans les poches</label>
       <div id="f-pocket-rows"></div>
       <p class="hint" id="f-pocket-rest"></p>
     </div>`;
@@ -1059,7 +1060,9 @@ function wirePocket(form) {
     for (const input of rows.querySelectorAll('input')) { try { used += input.value.trim() ? parseAmount(input.value) : 0; } catch (e) { /* saisie en cours */ } }
     if (amount === null) { restLine.textContent = ''; return; }
     const rest = amount - used;
-    restLine.textContent = rest >= 0 ? `Non réparti : ${euro(rest)}` : `Les poches dépassent le virement de ${euro(-rest)}`;
+    const out = (form.querySelector('#f-kind .on') || {}).dataset?.kind === 'Revenu';
+    restLine.textContent = rest >= 0 ? `${out ? 'Pris dans le non réparti' : 'Non réparti'} : ${euro(rest)}`
+      : `Les poches dépassent le montant de ${euro(-rest)}`;
     restLine.style.color = rest >= 0 ? '' : 'var(--red)';
   };
   const fill = () => {
@@ -1077,6 +1080,7 @@ function wirePocket(form) {
   account.addEventListener('change', () => { box.dataset.initial = 'null'; fill(); });
   rows.addEventListener('input', showRest);
   if (amountInput) amountInput.addEventListener('input', showRest);
+  form.addEventListener('pocket-kind', showRest);
   fill();
 }
 /** Répartition choisie : null (tout en non réparti) ou {poche: montant} ; refuse plus que le virement. */
@@ -1116,14 +1120,19 @@ function renderSavings() {
           ${catIcon('Épargne')}<span class="title">${esc(a.name)}</span><span class="amount">${euro(split.total)}</span>
         </button>
         ${lines}
+        <div class="actions saving-actions">
+          <button type="button" class="secondary" data-deposit="${a.id}">+ Verser</button>
+          <button type="button" class="secondary" data-withdraw="${a.id}">− Retirer</button>
+        </div>
       </div>`;
   }).join('');
   view.innerHTML = `
     <h2>Épargne</h2>
     <button type="button" class="primary wide" id="add-saving">+ Ajouter un compte épargne</button>
     <div class="list">${cards || '<p class="empty">Aucun compte épargne. Ajoute un compte pour y affecter tes virements.</p>'}</div>
-    <p class="note">Le montant à droite est le solde réel du compte. Touche un compte pour le diviser en poches ; chaque virement
-      vers l'épargne peut ensuite aller dans une poche. Les virements futurs sont crédités seulement à leur date.</p>`;
+    <p class="note">Le montant à droite est le solde réel du compte. Touche un compte pour le diviser en poches.
+      « Verser » ajoute de l'argent (une dépense sur ton compte courant), « Retirer » en reprend (un revenu) ;
+      dans les deux cas tu choisis les poches concernées. Les opérations futures comptent seulement à leur date.</p>`;
 }
 
 function pocketRow(p) {
@@ -1327,6 +1336,12 @@ function wirePickers(form, split = false) {
     const k = form.querySelector('#f-kind .on').dataset.kind;
     const c = form.querySelector('#cats .on').dataset.cat;
     form.querySelector('#f-account-box').hidden = !(isSavings(c, k) && !split);
+    // Un revenu dans l'épargne = un retrait : l'argent quitte le compte épargne.
+    const out = k === 'Revenu';
+    form.querySelector('#f-account-label').textContent = out ? 'Retirer du compte épargne' : 'Compte épargne destinataire';
+    const pocketLabel = form.querySelector('#f-pocket-label');
+    if (pocketLabel) pocketLabel.textContent = out ? 'Prendre dans les poches' : 'Répartir dans les poches';
+    form.dispatchEvent(new Event('pocket-kind'));
   };
   wirePocket(form);
   form.querySelector('#f-kind').addEventListener('click', (e) => {
@@ -1417,7 +1432,7 @@ function fixedSheet(group = null) {
     <label class="field">Catégorie</label>
     ${categoryPicker(group ? group.category : (names.includes('Factures') ? 'Factures' : names[0]))}
     <div id="f-account-box" hidden>
-      <label class="field" for="f-account">Compte épargne destinataire</label>
+      <label class="field" for="f-account" id="f-account-label">Compte épargne destinataire</label>
       <select class="input" id="f-account">${accountOptions(transfer ? transfer.account_id : null)}</select>
       ${pocketField(group ? pocketsData().groups[group.id] : null)}
     </div>
@@ -1559,18 +1574,21 @@ function stopFixedSheet(group) {
   });
 }
 
-function transactionSheet(item) {
+/** preset (nouvelle transaction) : {kind, category, account, title} — ex. verser ou retirer depuis l'onglet Épargne. */
+function transactionSheet(item, preset = null) {
   const editing = !!item;
   const split = editing && item.installments > 1;
-  const transfer = editing ? state.data.savings_transfers.find((t) => t.item_id === item.id) : null;
-  const kind = editing ? item.kind : 'Dépense';
-  const cat = editing ? item.category : (categories().find((c) => c.name === 'Alimentation') || categories()[0]).name;
+  const transfer = editing ? state.data.savings_transfers.find((t) => t.item_id === item.id)
+    : (preset && preset.account ? { account_id: preset.account } : null);
+  const kind = editing ? item.kind : (preset && preset.kind) || 'Dépense';
+  const cat = editing ? item.category : (preset && preset.category)
+    || (categories().find((c) => c.name === 'Alimentation') || categories()[0]).name;
   const html = `
-    <h3>${editing ? 'Modifier la transaction' : 'Nouvelle transaction'}</h3>
+    <h3>${editing ? 'Modifier la transaction' : (preset && preset.heading) || 'Nouvelle transaction'}</h3>
     <label class="field" for="f-amount">Montant (€)</label>
     <input class="input big" id="f-amount" inputmode="decimal" autocomplete="off" value="${editing ? amountText(item.total_cents) : ''}">
     <label class="field" for="f-title">Description</label>
-    <input class="input" id="f-title" autocomplete="off" value="${editing ? esc(item.title) : ''}">
+    <input class="input" id="f-title" autocomplete="off" value="${editing ? esc(item.title) : esc((preset && preset.title) || '')}">
     <label class="field">Type</label>
     <div class="segmented" id="f-kind">
       <button type="button" data-kind="Dépense" class="${kind === 'Dépense' ? 'on' : ''}" ${split ? 'disabled' : ''}>Dépense</button>
@@ -1579,7 +1597,7 @@ function transactionSheet(item) {
     <label class="field">Catégorie</label>
     ${categoryPicker(cat)}
     <div id="f-account-box" hidden>
-      <label class="field" for="f-account">Compte épargne destinataire</label>
+      <label class="field" for="f-account" id="f-account-label">Compte épargne destinataire</label>
       <select class="input" id="f-account">${accountOptions(transfer ? transfer.account_id : null)}</select>
       ${pocketField(editing ? pocketsData().items[item.id] : null)}
     </div>
@@ -1773,6 +1791,16 @@ document.addEventListener('click', async (event) => {
   if (t.closest('#today')) { state.selected = currentMonth(); render(); return; }
   if (t.closest('#add-fixed')) { fixedSheet(); return; }
   if (t.closest('#add-saving')) { savingSheet(); return; }
+  const move = t.closest('[data-deposit], [data-withdraw]');
+  if (move) {
+    const out = !!move.dataset.withdraw;
+    const accountId = Number(move.dataset.withdraw || move.dataset.deposit);
+    const savingsCat = (categories().find((c) => c.savings) || { name: 'Épargne' }).name;
+    transactionSheet(null, { kind: out ? 'Revenu' : 'Dépense', category: savingsCat, account: accountId,
+                             title: out ? 'Retrait épargne' : 'Virement épargne',
+                             heading: out ? 'Retirer de l’épargne' : 'Verser sur l’épargne' });
+    return;
+  }
   const savingRow = t.closest('[data-saving]');
   if (savingRow) {
     const account = state.data.savings_accounts.find((a) => a.id === Number(savingRow.dataset.saving));

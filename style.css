@@ -190,3 +190,5 @@ textarea.input { resize: vertical; font: inherit; }
 .secondary.wide { display: block; width: 100%; }
 .pocket-split { display: grid; grid-template-columns: 1fr 120px; gap: 8px; align-items: center; margin-top: 6px; }
 .pocket-split .input { margin: 0; text-align: right; }
+.saving-actions { margin-top: 12px; }
+.saving-actions .secondary { flex: 1; padding: 10px; }
