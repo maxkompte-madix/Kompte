@@ -968,10 +968,22 @@ function pocketsOf(accountId) {
   return Array.isArray(list) ? list.filter((p) => p && Number.isFinite(Number(p.id)) && typeof p.name === 'string')
     .map((p) => ({ id: Number(p.id), name: p.name, start: Number.isInteger(p.start) ? p.start : 0 })) : [];
 }
-/** Poche d'une transaction ('items') ou d'un montant fixe ('groups') dans ce compte épargne, sinon null. */
-function pocketOf(kind, id, accountId) {
-  const pocket = Number(pocketsData()[kind][id]);
-  return pocketsOf(accountId).some((p) => p.id === pocket) ? pocket : null;
+/** Répartition d'un virement (transaction 'items' ou montant fixe 'groups') dans les poches du compte :
+    [[poche, montant signé]]. Réglage = une poche (tout le virement) ou {poche: montant} ; si les montants
+    dépassent le virement (mois fixe plus petit), ils sont réduits en proportion. Le reste est non réparti. */
+function pocketParts(kind, id, accountId, cents) {
+  const value = pocketsData()[kind][id];
+  const valid = new Set(pocketsOf(accountId).map((p) => p.id));
+  if (typeof value === 'number' || (typeof value === 'string' && value !== '')) {
+    return valid.has(Number(value)) ? [[Number(value), cents]] : [];
+  }
+  if (!value || typeof value !== 'object') return [];
+  const parts = Object.entries(value).map(([p, c]) => [Number(p), c])
+    .filter(([p, c]) => valid.has(p) && Number.isInteger(c) && c > 0);
+  const sum = parts.reduce((t, [, c]) => t + c, 0);
+  const whole = Math.abs(cents);
+  const sign = cents < 0 ? -1 : 1;
+  return parts.map(([p, c]) => [p, sign * (sum > whole ? Math.floor((c * whole) / sum) : c)]);
 }
 async function savePockets(value) {
   const raw = state.all.kv.savings_pockets && typeof state.all.kv.savings_pockets === 'object' ? state.all.kv.savings_pockets : {};
@@ -979,12 +991,13 @@ async function savePockets(value) {
   state.all.kv.savings_pockets = full;
   await check(sb.from('kv_settings').upsert({ key: 'savings_pockets', value: full }, { onConflict: 'user_id,key' }));
 }
-async function setPocketOf(kind, id, pocket) {
+/** Enregistre la répartition d'un virement : null (non réparti) ou {poche: montant}. */
+async function setPocketOf(kind, id, split) {
   const d = pocketsData();
-  const current = d[kind][id] === undefined ? null : Number(d[kind][id]);
-  if (current === pocket) return;
+  const current = d[kind][id] === undefined ? null : d[kind][id];
+  if (JSON.stringify(current) === JSON.stringify(split)) return;
   const map = { ...d[kind] };
-  if (pocket === null) delete map[id]; else map[id] = pocket;
+  if (split === null) delete map[id]; else map[id] = split;
   await savePockets({ [kind]: map });
 }
 
@@ -1019,38 +1032,67 @@ function accountSplit(accountId) {
   const pockets = pocketsOf(accountId).map((p) => ({ ...p, cents: p.start }));
   const byId = new Map(pockets.map((p) => [p.id, p]));
   for (const m of accountMoves(accountId)) {
-    const p = byId.get(pocketOf(m.kind, m.id, accountId));
-    if (p) p.cents += m.cents;
+    for (const [pocket, cents] of pocketParts(m.kind, m.id, accountId, m.cents)) byId.get(pocket).cents += cents;
   }
   return { total, pockets, rest: total - pockets.reduce((sum, p) => sum + p.cents, 0) };
 }
 
-/** Choix de la poche, sous le compte épargne d'un virement (caché si le compte n'a pas de poche). */
+/** Répartition entre les poches, sous le compte épargne d'un virement (caché si le compte n'a pas de poche). */
 function pocketField(initial) {
-  return `<div id="f-pocket-box" data-initial="${initial === undefined || initial === null ? '' : Number(initial)}" hidden>
-      <label class="field" for="f-pocket">Poche</label>
-      <select class="input" id="f-pocket"></select>
+  return `<div id="f-pocket-box" data-initial="${esc(JSON.stringify(initial === undefined ? null : initial))}" hidden>
+      <label class="field">Répartir dans les poches</label>
+      <div id="f-pocket-rows"></div>
+      <p class="hint" id="f-pocket-rest"></p>
     </div>`;
 }
 function wirePocket(form) {
   const account = form.querySelector('#f-account');
   const box = form.querySelector('#f-pocket-box');
   if (!account || !box) return;
-  const select = box.querySelector('select');
+  const amountInput = form.querySelector('#f-amount') || form.querySelector('#x-amount');
+  const rows = box.querySelector('#f-pocket-rows');
+  const restLine = box.querySelector('#f-pocket-rest');
+  const amountNow = () => { try { return parseAmount(amountInput.value); } catch (e) { return null; } };
+  const showRest = () => {
+    const amount = amountNow();
+    let used = 0;
+    for (const input of rows.querySelectorAll('input')) { try { used += input.value.trim() ? parseAmount(input.value) : 0; } catch (e) { /* saisie en cours */ } }
+    if (amount === null) { restLine.textContent = ''; return; }
+    const rest = amount - used;
+    restLine.textContent = rest >= 0 ? `Non réparti : ${euro(rest)}` : `Les poches dépassent le virement de ${euro(-rest)}`;
+    restLine.style.color = rest >= 0 ? '' : 'var(--red)';
+  };
   const fill = () => {
     const list = pocketsOf(Number(account.value));
-    const keep = select.value || box.dataset.initial;
+    let initial = null;
+    try { initial = JSON.parse(box.dataset.initial || 'null'); } catch (e) { initial = null; }
+    const amounts = {};
+    if (typeof initial === 'number' || typeof initial === 'string') amounts[Number(initial)] = amountInput.value.trim(); // ancien réglage : tout le virement
+    else if (initial && typeof initial === 'object') for (const [p, c] of Object.entries(initial)) amounts[Number(p)] = amountText(c);
     box.hidden = !list.length;
-    select.innerHTML = '<option value="">Non réparti</option>' + list.map((p) =>
-      `<option value="${p.id}" ${String(p.id) === String(keep) ? 'selected' : ''}>${esc(p.name)}</option>`).join('');
+    rows.innerHTML = list.map((p) => `<div class="pocket-split"><span>${esc(p.name)}</span>
+        <input class="input" inputmode="decimal" autocomplete="off" placeholder="0,00" data-pocket="${p.id}" value="${esc(amounts[p.id] || '')}"></div>`).join('');
+    showRest();
   };
-  account.addEventListener('change', () => { box.dataset.initial = ''; select.value = ''; fill(); });
+  account.addEventListener('change', () => { box.dataset.initial = 'null'; fill(); });
+  rows.addEventListener('input', showRest);
+  if (amountInput) amountInput.addEventListener('input', showRest);
   fill();
 }
-function chosenPocket(form) {
+/** Répartition choisie : null (tout en non réparti) ou {poche: montant} ; refuse plus que le virement. */
+function chosenPocket(form, amount) {
   const box = form.querySelector('#f-pocket-box');
   if (!box || box.hidden) return null;
-  return Number(box.querySelector('select').value) || null;
+  const split = {};
+  let used = 0;
+  for (const input of box.querySelectorAll('input[data-pocket]')) {
+    if (!input.value.trim()) continue;
+    const cents = parseAmount(input.value);
+    if (cents < 0) throw new Error('Un montant de poche ne peut pas être négatif.');
+    if (cents > 0) { split[input.dataset.pocket] = cents; used += cents; }
+  }
+  if (used > amount) throw new Error(`Les poches (${euro(used)}) dépassent le montant du virement (${euro(amount)}).`);
+  return used ? split : null;
 }
 
 /** Une ligne de poche avec sa barre de remplissage (part du total réel du compte). */
@@ -1128,7 +1170,13 @@ function savingSheet(account = null) {
     const d = pocketsData();
     const kept = new Set(list.map((p) => p.id));
     const removed = new Set(pockets.filter((p) => !kept.has(p.id)).map((p) => p.id));
-    const clean = (map) => Object.fromEntries(Object.entries(map).filter(([, p]) => !removed.has(Number(p))));
+    const clean = (map) => Object.fromEntries(Object.entries(map).map(([k, v]) => {
+      if (v && typeof v === 'object') {
+        const left = Object.fromEntries(Object.entries(v).filter(([p]) => !removed.has(Number(p))));
+        return [k, Object.keys(left).length ? left : null];
+      }
+      return [k, removed.has(Number(v)) ? null : v];
+    }).filter(([, v]) => v !== null));
     const accounts = { ...d.accounts };
     if (list.length) accounts[accountId] = list; else delete accounts[accountId];
     if (list.length || pockets.length) await savePockets({ accounts, items: clean(d.items), groups: clean(d.groups) });
@@ -1406,7 +1454,7 @@ function fixedSheet(group = null) {
     }
     const target = chosenTarget(form, accountId);
     await saveFixed(group, { title, category: cat, kind: chosenKind, amount, start: start.slice(0, 7), day, accountId, target,
-                             pocket: chosenPocket(form) });
+                             pocket: accountId === null ? null : chosenPocket(form, amount) });
   });
   const form = $('#sheet-form');
   wirePickers(form);
@@ -1575,18 +1623,19 @@ function transactionSheet(item) {
                      vers_compte_id: chosenTarget(form, accountId) };
     const cardBox = form.querySelector('#f-card');
     const paidByCard = !!cardBox && cardBox.checked && kindValue === 'Dépense' && accountId === null && fields.vers_compte_id === null;
+    const pocketSplit = accountId === null ? null : chosenPocket(form, total); // vérifiée avant d'enregistrer
     if (editing) {
       await check(sb.from('items').update({ ...fields, installments: n, frequency: item.frequency }).eq('id', item.id));
       await check(sb.from('savings_transfers').delete().eq('item_id', item.id));
       if (accountId !== null) await check(sb.from('savings_transfers').insert({ item_id: item.id, account_id: accountId }));
-      await setPocketOf('items', item.id, accountId === null ? null : chosenPocket(form));
+      await setPocketOf('items', item.id, pocketSplit);
       await check(sb.from('confirmations').delete().eq('item_id', item.id));
       if (cardBox) { const value = cardWithItem(item.id, paidByCard); if (value) await saveCard(value); }
     } else {
       const id = newId();
       await check(sb.from('items').insert({ id, compte_id: state.compte, ...fields, installments: 1, frequency: 'Unique', created_at: utcStamp() }));
       if (accountId !== null) await check(sb.from('savings_transfers').insert({ item_id: id, account_id: accountId }));
-      if (accountId !== null) await setPocketOf('items', id, chosenPocket(form));
+      if (pocketSplit !== null) await setPocketOf('items', id, pocketSplit);
       if (paidByCard) { const value = cardWithItem(id, true); if (value) await saveCard(value); }
     }
   });
