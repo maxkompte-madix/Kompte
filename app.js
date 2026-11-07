@@ -142,14 +142,16 @@ function categories() {
     for (const c of saved.categories) {
       const name = String(c.name || '').trim();
       if (!name || list.some((x) => x.name === name) || !/^#[0-9a-fA-F]{6}$/.test(String(c.color))) continue;
-      list.push({ name, color: c.color, icon: c.icon || 'Divers', savings: hasFlag ? !!c.savings : name === 'Épargne' });
+      list.push({ name, color: c.color, icon: c.icon || 'Divers', savings: hasFlag ? !!c.savings : name === 'Épargne',
+                  subs: cleanSubs(c.subs) || DEFAULT_SUBS[name] || [] });
     }
   }
   if (list.length) return list;
-  return Object.entries(DEFAULT_COLORS).map(([name, color]) => ({ name, color, icon: name, savings: name === 'Épargne' }));
+  return Object.entries(DEFAULT_COLORS).map(([name, color]) => ({ name, color, icon: name, savings: name === 'Épargne',
+                                                                  subs: DEFAULT_SUBS[name] || [] }));
 }
 function category(name) {
-  return categories().find((c) => c.name === name) || { name, color: '#9CA3AF', icon: 'Divers', savings: false };
+  return categories().find((c) => c.name === name) || { name, color: '#9CA3AF', icon: 'Divers', savings: false, subs: [] };
 }
 function iconSlug(icon) { return icon.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase(); }
 function catIcon(name) {
@@ -305,52 +307,156 @@ function paySheet(reminder) {
   });
 }
 
-// ------------------------------------------- repas : midi ou restaurant (= kompte.py)
-// Réglage partagé « meal_tags » : {transaction: 'midi' | 'resto'}, pour la catégorie Alimentation.
-const MEALS = { midi: 'Repas du midi', resto: 'Restaurant' };
-const MEAL_CATEGORY = 'Alimentation';
-function mealOf(itemId) {
-  const tags = state.all && state.all.kv.meal_tags;
-  const tag = tags && typeof tags === 'object' ? tags[itemId] : null;
-  return MEALS[tag] ? tag : null;
+// ------------------------------------------------ catégories et sous-catégories (= kompte.py)
+// Une catégorie : {name, color, icon, savings, subs: [{id, name}]} dans le réglage partagé « categories ».
+// Une opération garde l'id de sa sous-catégorie dans « meal_tags » {transaction: id} (nom d'origine : les repas).
+const DEFAULT_SUBS = { Alimentation: [{ id: 'midi', name: 'Repas du midi' }, { id: 'resto', name: 'Restaurant' }] };
+const ICONS = Object.keys(DEFAULT_COLORS);
+function cleanSubs(subs) {
+  if (!Array.isArray(subs)) return null;
+  const seen = new Set();
+  return subs.filter((s) => s && typeof s.name === 'string' && s.name.trim() && s.id !== undefined && s.id !== null)
+    .map((s) => ({ id: String(s.id), name: s.name.trim() }))
+    .filter((s) => !seen.has(s.id) && seen.add(s.id));
 }
-async function setMeal(itemId, tag) {
+function subsOf(categoryName) { return category(categoryName).subs || []; }
+/** Sous-catégorie d'une opération (seulement si elle existe encore dans sa catégorie), sinon null. */
+function subOf(row) {
+  if (!row || row.id < 0) return null;
+  const tags = state.all && state.all.kv.meal_tags;
+  const id = tags && typeof tags === 'object' ? tags[row.id] : null;
+  return id === null || id === undefined ? null : subsOf(row.category).find((s) => s.id === String(id)) || null;
+}
+async function setSub(itemId, subId) {
   const raw = state.all.kv.meal_tags && typeof state.all.kv.meal_tags === 'object' ? state.all.kv.meal_tags : {};
-  if ((raw[itemId] || null) === tag) return;
+  if ((raw[itemId] === undefined ? null : String(raw[itemId])) === subId) return;
   const value = { ...raw };
-  if (tag) value[itemId] = tag; else delete value[itemId];
+  if (subId) value[itemId] = subId; else delete value[itemId];
   state.all.kv.meal_tags = value;
   await check(sb.from('kv_settings').upsert({ key: 'meal_tags', value }, { onConflict: 'user_id,key' }));
 }
-/** Totaux du mois : {midi, resto} (dépenses Alimentation marquées). */
-function mealTotals(events) {
-  const totals = { midi: 0, resto: 0 };
-  for (const e of events) {
-    const tag = e.row.id > 0 && e.row.kind === 'Dépense' && e.row.category === MEAL_CATEGORY ? mealOf(e.row.id) : null;
-    if (tag) totals[tag] += e.amount;
+/** Enregistre la liste complète des catégories (partagée par tous les comptes et le PC). */
+async function saveCategories(list) {
+  const raw = state.all.kv.categories && typeof state.all.kv.categories === 'object' ? state.all.kv.categories : {};
+  const value = { ...raw, categories: list.map((c) => ({ name: c.name, color: c.color, icon: c.icon, savings: !!c.savings,
+                                                           subs: c.subs || [] })) };
+  state.all.kv.categories = value;
+  await check(sb.from('kv_settings').upsert({ key: 'categories', value }, { onConflict: 'user_id,key' }));
+}
+
+function categoriesSection() {
+  return `<label class="field">Catégories (communes à tous les comptes)</label>
+    <div class="list">${categories().map((c) => `<button type="button" class="row" data-category="${esc(c.name)}">
+        ${catIcon(c.name)}
+        <span class="body"><span class="title" style="color:${c.color}">${esc(c.name)}</span>
+          <span class="sub">${c.subs.length ? esc(c.subs.map((s) => s.name).join(' · ')) : 'Pas de sous-catégorie'}${c.savings ? ' · épargne' : ''}</span></span>
+      </button>`).join('')}</div>
+    <button type="button" class="secondary wide" id="add-category" style="margin-top:8px">+ Nouvelle catégorie</button>`;
+}
+
+function subRow(s) {
+  return `<div class="pocket-edit sub-edit" data-sub="${s ? esc(s.id) : ''}">
+      <input class="input" placeholder="Nom (ex. Restaurant)" autocomplete="off" value="${s ? esc(s.name) : ''}">
+      <button type="button" aria-label="Supprimer la sous-catégorie">✕</button>
+    </div>`;
+}
+
+function categorySheet(original = null) {
+  const c = original ? category(original) : { name: '', color: '#22D3EE', icon: 'Divers', savings: false, subs: [] };
+  openSheet(`
+    <h3>${original ? 'Modifier la catégorie' : 'Nouvelle catégorie'}</h3>
+    <label class="field" for="c-name">Nom</label>
+    <input class="input" id="c-name" autocomplete="off" value="${esc(c.name)}">
+    <label class="field" for="c-icon">Pictogramme</label>
+    <select class="input" id="c-icon">${ICONS.map((i) => `<option ${i === c.icon ? 'selected' : ''}>${esc(i)}</option>`).join('')}</select>
+    <label class="field" for="c-color">Couleur</label>
+    <input class="input color" id="c-color" type="color" value="${c.color.toLowerCase()}">
+    <label class="check"><input type="checkbox" id="c-savings" ${c.savings ? 'checked' : ''}> Virements vers un compte épargne</label>
+    <label class="field">Sous-catégories</label>
+    <p class="hint">Facultatives : à choisir sur une opération de cette catégorie (ex. Restaurant). Elles peuvent avoir un budget.</p>
+    <div id="c-subs">${c.subs.map(subRow).join('')}</div>
+    <button type="button" class="secondary wide" id="c-add-sub" style="margin-top:8px">+ Ajouter une sous-catégorie</button>
+    <p class="error-text"></p>
+    <div class="actions">
+      ${original ? '<button type="button" class="secondary danger" id="c-delete">Supprimer</button>' : ''}
+      <button type="button" class="secondary" data-close>Annuler</button>
+      <button type="submit" class="primary">Enregistrer</button>
+    </div>`, async (form) => {
+    const name = form.querySelector('#c-name').value.trim();
+    if (!name) throw new Error('Donne un nom à la catégorie.');
+    const list = categories();
+    if (name !== original && list.some((x) => x.name === name)) throw new Error('Ce nom existe déjà.');
+    const subs = [...form.querySelectorAll('.sub-edit')].map((row) => {
+      const subName = row.querySelector('input').value.trim();
+      if (!subName) throw new Error('Donne un nom à chaque sous-catégorie (ou supprime-la).');
+      return { id: row.dataset.sub || String(newId()), name: subName };
+    });
+    const entry = { name, color: form.querySelector('#c-color').value.toUpperCase(), icon: form.querySelector('#c-icon').value,
+                    savings: form.querySelector('#c-savings').checked, subs };
+    const next = original ? list.map((x) => (x.name === original ? entry : x)) : [...list, entry];
+    if (original && name !== original) {
+      // Renommage : l'historique suit (transactions, montants fixes de tous les comptes, budgets).
+      await check(sb.from('items').update({ category: name }).eq('category', original));
+      await check(sb.from('fixed_groups').update({ category: name }).eq('category', original));
+      const budgets = state.all.kv.budgets && typeof state.all.kv.budgets === 'object' ? state.all.kv.budgets : null;
+      if (budgets) {
+        const renamed = Object.fromEntries(Object.entries(budgets).map(([compte, mine]) => [compte,
+          mine && typeof mine === 'object' ? Object.fromEntries(Object.entries(mine).map(([k, v]) =>
+            [k === original ? name : k.startsWith(`${original}|`) ? name + k.slice(original.length) : k, v])) : mine]));
+        state.all.kv.budgets = renamed;
+        await check(sb.from('kv_settings').upsert({ key: 'budgets', value: renamed }, { onConflict: 'user_id,key' }));
+      }
+    }
+    await saveCategories(next);
+  });
+  const form = $('#sheet-form');
+  const box = form.querySelector('#c-subs');
+  box.addEventListener('click', (e) => { const b = e.target.closest('button'); if (b) b.closest('.sub-edit').remove(); });
+  form.querySelector('#c-add-sub').addEventListener('click', () => {
+    box.insertAdjacentHTML('beforeend', subRow(null));
+    box.lastElementChild.querySelector('input').focus();
+  });
+  if (original) {
+    form.querySelector('#c-delete').addEventListener('click', async () => {
+      const list = categories();
+      const used = state.all.items.some((i) => i.category === original) || state.all.fixed_groups.some((g) => g.category === original);
+      if (list.length <= 1) { form.querySelector('.error-text').textContent = 'Il faut garder au moins une catégorie.'; return; }
+      if (used) {
+        form.querySelector('.error-text').textContent = 'Cette catégorie contient des opérations. Change-les de catégorie avant de la supprimer.';
+        return;
+      }
+      if (!confirm(`Supprimer « ${original} » ?`)) return;
+      try {
+        await saveCategories(list.filter((x) => x.name !== original));
+        closeSheet();
+        await refresh(true);
+      } catch (e) {
+        form.querySelector('.error-text').textContent = e.message;
+      }
+    });
   }
-  return totals;
 }
 
 // ------------------------------------------------- budgets par catégorie (= kompte.py)
-// Réglage partagé « budgets » : {compte: {catégorie: montant mensuel}} ; « Alimentation|midi » et
-// « Alimentation|resto » visent seulement les repas marqués. Dépensé = dépenses du mois déjà passées.
+// Réglage partagé « budgets » : {compte: {catégorie: montant mensuel}} ; « Catégorie|id » vise une sous-catégorie.
+// Dépensé = dépenses du mois déjà passées.
 function budgetsOf(compte) {
   const raw = state.all && state.all.kv.budgets;
   const mine = raw && typeof raw === 'object' && raw[compte] && typeof raw[compte] === 'object' ? raw[compte] : {};
   return Object.fromEntries(Object.entries(mine).filter(([, v]) => Number.isInteger(v) && v > 0));
 }
 function budgetLabel(key) {
-  const [cat, meal] = key.split('|');
-  return meal ? `${cat} · ${MEALS[meal] || meal}` : cat;
+  const i = key.indexOf('|');
+  if (i < 0) return key;
+  const sub = subsOf(key.slice(0, i)).find((s) => s.id === key.slice(i + 1));
+  return sub ? sub.name : key.slice(i + 1);
 }
-/** Catégories qui peuvent avoir un budget : toutes sauf Revenus, et les deux types de repas. */
+/** Catégories qui peuvent avoir un budget : toutes sauf Revenus, et leurs sous-catégories. */
 function budgetKeys() {
   const keys = [];
   for (const c of categories()) {
     if (c.name === 'Revenus') continue;
-    keys.push(c.name);
-    if (c.name === MEAL_CATEGORY) keys.push(...Object.keys(MEALS).map((m) => `${MEAL_CATEGORY}|${m}`));
+    keys.push(c.name, ...c.subs.map((s) => `${c.name}|${s.id}`));
   }
   return keys;
 }
@@ -362,13 +468,14 @@ function budgetRows(ym) {
   for (const e of summary(ym).events) {
     if (e.row.kind !== 'Dépense' || e.due > today) continue;
     spent[e.row.category] = (spent[e.row.category] || 0) + e.amount;
-    if (e.row.id > 0 && e.row.category === MEAL_CATEGORY && mealOf(e.row.id)) {
-      const key = `${MEAL_CATEGORY}|${mealOf(e.row.id)}`;
+    const sub = subOf(e.row);
+    if (sub) {
+      const key = `${e.row.category}|${sub.id}`;
       spent[key] = (spent[key] || 0) + e.amount;
     }
   }
   const order = budgetKeys();
-  return Object.keys(budgets).sort((a, b) => order.indexOf(a) - order.indexOf(b))
+  return Object.keys(budgets).filter((k) => order.includes(k)).sort((a, b) => order.indexOf(a) - order.indexOf(b))
     .map((key) => ({ key, label: budgetLabel(key), budget: budgets[key], spent: spent[key] || 0 }));
 }
 /** Barre de budget : verte, orange à partir de 80 %, rouge au-delà du budget. */
@@ -403,7 +510,7 @@ function budgetsSheet() {
   const lines = rows.map((r) => {
     const rest = r.budget - r.spent;
     return `<div class="budget ${r.key.includes('|') ? 'sub' : ''}">
-        <div class="pocket-line"><span>${r.key.includes('|') ? '↳ ' + esc(MEALS[r.key.split('|')[1]] || r.label) : catIcon(r.key) + esc(r.label)}</span>
+        <div class="pocket-line"><span>${r.key.includes('|') ? '↳ ' + esc(r.label) : catIcon(r.key) + esc(r.label)}</span>
           <span>${euro(r.spent)} <span class="pct">/ ${euro(r.budget)}</span></span></div>
         ${budgetBar(r.spent, r.budget)}
         <small style="color:var(${rest < 0 ? '--red' : '--muted'})">${rest < 0 ? `Dépassé de ${euro(-rest)}` : `Reste ${euro(rest)}`}</small>
@@ -421,7 +528,7 @@ function budgetsSheet() {
 function budgetEditSheet() {
   const budgets = budgetsOf(state.compte);
   const fields = budgetKeys().map((key) => `<div class="pocket-split ${key.includes('|') ? 'sub' : ''}">
-      <span>${key.includes('|') ? '↳ ' + esc(MEALS[key.split('|')[1]]) : catIcon(key) + esc(key)}</span>
+      <span>${key.includes('|') ? '↳ ' + esc(budgetLabel(key)) : catIcon(key) + esc(key)}</span>
       <input class="input" inputmode="decimal" autocomplete="off" placeholder="—" data-budget="${esc(key)}"
         value="${budgets[key] ? amountText(budgets[key]) : ''}"></div>`).join('');
   openSheet(`
@@ -848,7 +955,7 @@ function eventRow(e) {
     when += ' · fixe';
     if (r.override !== null && r.override !== undefined) when += ' (modifié ce mois)';
   }
-  if (r.id > 0 && r.category === MEAL_CATEGORY && mealOf(r.id)) when += ` · ${MEALS[mealOf(r.id)].toLowerCase()}`;
+  if (subOf(r)) when += ` · ${subOf(r).name}`;
   const plus = r.kind === 'Revenu';
   return `<button type="button" class="row" data-item="${r.id}" data-due="${e.due}">
       ${catIcon(r.category)}
@@ -1034,7 +1141,7 @@ function renderTransactions() {
     let details = `${r.category} · ${frDate(e.due)}`;
     if (transferNote(r)) details += ` · ${transferNote(r)}`;
     if (isCard(r)) details += ' · carte';
-    if (r.id > 0 && r.category === MEAL_CATEGORY && mealOf(r.id)) details += ` · ${MEALS[mealOf(r.id)].toLowerCase()}`;
+    if (subOf(r)) details += ` · ${subOf(r).name}`;
     if (debitDate(r, e.due) !== e.due) details += ` · débit le ${frDate(debitDate(r, e.due))}`;
     if (r.id < 0) details += ' · fixe';
     else if (r.installments > 1) {
@@ -1392,8 +1499,7 @@ function renderAccount() {
       <p class="hint">Relevé en cours : achats du ${frDate(addDays(monthShift(cardCycleEnd(card, todayIso()), -1), 1))}
         au ${frDate(cardCycleEnd(card, todayIso()))}, prélevés le ${frDate(cardDebit(card, cardCycleEnd(card, todayIso())))}.
         Coche « Payé par carte » sur chaque achat.</p>` : ''}
-    <p class="note">La modification des montants fixes, les comptes épargne et les catégories se font sur le PC ;
-      ils sont pris en compte ici dans les calculs.</p>
+    ${categoriesSection()}
     <div class="actions">
       <button type="button" class="secondary" id="password-change">Changer le mot de passe</button>
       <button type="button" class="secondary" id="logout">Se déconnecter</button>
@@ -1486,16 +1592,24 @@ function wirePickers(form, split = false) {
     const pocketLabel = form.querySelector('#f-pocket-label');
     if (pocketLabel) pocketLabel.textContent = out ? 'Prendre dans les poches' : 'Répartir dans les poches';
     form.dispatchEvent(new Event('pocket-kind'));
-    const meal = form.querySelector('#f-meal-box');
-    if (meal) meal.hidden = !(c === MEAL_CATEGORY && k === 'Dépense');
+    const subBox = form.querySelector('#f-sub-box');
+    if (subBox && subBox.dataset.cat !== c) {
+      // Sous-catégories de la catégorie choisie ; on garde le choix si on revient sur la même.
+      const keep = subBox.dataset.cat === undefined ? subBox.dataset.initial : '';
+      subBox.dataset.cat = c;
+      const subs = subsOf(c);
+      subBox.hidden = !subs.length;
+      subBox.querySelector('#f-sub').innerHTML = subs.map((x) =>
+        `<button type="button" data-sub="${esc(x.id)}" class="${x.id === keep ? 'on' : ''}">${esc(x.name)}</button>`).join('');
+    }
   };
-  const mealBox = form.querySelector('#f-meal');
-  if (mealBox) {
-    mealBox.addEventListener('click', (e) => {
-      const b = e.target.closest('button[data-meal]');
+  const subButtons = form.querySelector('#f-sub');
+  if (subButtons) {
+    subButtons.addEventListener('click', (e) => {
+      const b = e.target.closest('button[data-sub]');
       if (!b) return;
       const on = !b.classList.contains('on'); // toucher à nouveau : décocher
-      mealBox.querySelectorAll('button').forEach((x) => x.classList.toggle('on', on && x === b));
+      subButtons.querySelectorAll('button').forEach((x) => x.classList.toggle('on', on && x === b));
     });
   }
   wirePocket(form);
@@ -1756,11 +1870,9 @@ function transactionSheet(item, preset = null) {
       <select class="input" id="f-account">${accountOptions(transfer ? transfer.account_id : null)}</select>
       ${pocketField(editing ? pocketsData().items[item.id] : null)}
     </div>
-    <div id="f-meal-box" hidden>
-      <label class="field">Type de repas (facultatif)</label>
-      <div class="segmented meal" id="f-meal">
-        ${Object.entries(MEALS).map(([tag, label]) => `<button type="button" data-meal="${tag}" class="${editing && mealOf(item.id) === tag ? 'on' : ''}">${label}</button>`).join('')}
-      </div>
+    <div id="f-sub-box" data-initial="${editing && subOf(item) ? esc(subOf(item).id) : ''}" hidden>
+      <label class="field">Sous-catégorie (facultatif)</label>
+      <div class="segmented sub" id="f-sub"></div>
     </div>
     ${targetField(editing ? item.vers_compte_id : null)}
     ${cardConf(state.compte) ? `<label class="check" id="f-card-box"><input type="checkbox" id="f-card"
@@ -1803,14 +1915,14 @@ function transactionSheet(item, preset = null) {
     const cardBox = form.querySelector('#f-card');
     const paidByCard = !!cardBox && cardBox.checked && kindValue === 'Dépense' && accountId === null && fields.vers_compte_id === null;
     const pocketSplit = accountId === null ? null : chosenPocket(form, total); // vérifiée avant d'enregistrer
-    const mealOn = form.querySelector('#f-meal .on');
-    const meal = catValue === MEAL_CATEGORY && kindValue === 'Dépense' && mealOn ? mealOn.dataset.meal : null;
+    const subOn = form.querySelector('#f-sub .on');
+    const sub = subOn ? subOn.dataset.sub : null;
     if (editing) {
       await check(sb.from('items').update({ ...fields, installments: n, frequency: item.frequency }).eq('id', item.id));
       await check(sb.from('savings_transfers').delete().eq('item_id', item.id));
       if (accountId !== null) await check(sb.from('savings_transfers').insert({ item_id: item.id, account_id: accountId }));
       await setPocketOf('items', item.id, pocketSplit);
-      await setMeal(item.id, meal);
+      await setSub(item.id, sub);
       await check(sb.from('confirmations').delete().eq('item_id', item.id));
       if (cardBox) { const value = cardWithItem(item.id, paidByCard); if (value) await saveCard(value); }
     } else {
@@ -1818,7 +1930,7 @@ function transactionSheet(item, preset = null) {
       await check(sb.from('items').insert({ id, compte_id: state.compte, ...fields, installments: 1, frequency: 'Unique', created_at: utcStamp() }));
       if (accountId !== null) await check(sb.from('savings_transfers').insert({ item_id: id, account_id: accountId }));
       if (pocketSplit !== null) await setPocketOf('items', id, pocketSplit);
-      if (meal) await setMeal(id, meal);
+      if (sub) await setSub(id, sub);
       if (paidByCard) { const value = cardWithItem(id, true); if (value) await saveCard(value); }
     }
   });
@@ -1832,7 +1944,7 @@ function transactionSheet(item, preset = null) {
       try {
         await check(sb.from('items').delete().eq('id', item.id));
         await setPocketOf('items', item.id, null);
-        await setMeal(item.id, null);
+        await setSub(item.id, null);
         const value = cardWithItem(item.id, false);
         if (value) await saveCard(value);
         closeSheet();
@@ -1958,6 +2070,9 @@ document.addEventListener('click', async (event) => {
   if (t.closest('#today')) { state.selected = currentMonth(); render(); return; }
   if (t.closest('#add-fixed')) { fixedSheet(); return; }
   if (t.closest('#add-saving')) { savingSheet(); return; }
+  if (t.closest('#add-category')) { categorySheet(); return; }
+  const catRow = t.closest('[data-category]');
+  if (catRow) { categorySheet(catRow.dataset.category); return; }
   const move = t.closest('[data-deposit], [data-withdraw]');
   if (move) {
     const out = !!move.dataset.withdraw;
