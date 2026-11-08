@@ -1494,7 +1494,7 @@ function renderDashboard() {
     <div class="metrics">
       ${metric('Revenus prévus', income, 'var(--green)')}
       ${metric('Dépenses prévues ›', out - paid, 'var(--red)', 'upcoming')}
-      ${metric('Déjà dépensé', paid, 'var(--text)')}
+      ${metric('Déjà dépensé ›', paid, 'var(--text)', 'spending')}
       <div class="metric"><small>Bilan du mois</small><b style="color:var(--blue)">${euro(income - out)}</b>
         ${carry === null ? '' : `<span class="carry" style="color:var(${carry >= 0 ? '--green' : '--red'})">Report du mois dernier : ${carry > 0 ? '+' : ''}${euro(carry)}</span>`}</div>
       ${budgetTile(ym)}
@@ -1605,6 +1605,80 @@ function upcomingSheet() {
     <div class="list" style="margin-top:12px">${events.map(eventRow).join('') || '<p class="empty">Plus aucune dépense prévue ce mois-ci.</p>'}</div>
     <p class="error-text"></p>
     <div class="actions"><button type="button" class="primary" data-close>Fermer</button></div>`, async () => {});
+}
+
+// ------------------------------------------------ répartition des dépenses du mois (graphique en anneau)
+/** [{name, color, total, subs: [{name, total}], events}] du plus gros au plus petit. paidOnly : seulement le déjà passé. */
+function spendingByCategory(ym, paidOnly) {
+  const today = todayIso();
+  const map = new Map();
+  for (const e of summary(ym).events) {
+    if (e.row.kind !== 'Dépense' || (paidOnly && e.due > today)) continue;
+    const name = e.row.category;
+    if (!map.has(name)) map.set(name, { name, color: category(name).color, total: 0, subs: new Map(), events: [] });
+    const c = map.get(name);
+    c.total += e.amount;
+    c.events.push(e);
+    const sub = subOf(e.row);
+    const subName = sub ? sub.name : 'Sans sous-catégorie';
+    c.subs.set(subName, (c.subs.get(subName) || 0) + e.amount);
+  }
+  return [...map.values()].sort((a, b) => b.total - a.total).map((c) => ({
+    ...c, subs: [...c.subs].map(([name, total]) => ({ name, total })).sort((a, b) => b.total - a.total) }));
+}
+/** Anneau SVG (cercle de périmètre 100 : chaque part = son pourcentage). */
+function donutSvg(parts, total, selected) {
+  let at = 0;
+  const arcs = parts.map((p) => {
+    const pct = (p.total / total) * 100;
+    const arc = `<circle cx="21" cy="21" r="15.9155" fill="none" stroke="${p.color}" stroke-width="6"
+      stroke-dasharray="${Math.max(0, pct - (parts.length > 1 ? 0.4 : 0)).toFixed(3)} ${(100 - pct + (parts.length > 1 ? 0.4 : 0)).toFixed(3)}"
+      stroke-dashoffset="${(25 - at).toFixed(3)}" opacity="${selected && selected !== p.name ? 0.25 : 1}"/>`;
+    at += pct;
+    return arc;
+  }).join('');
+  const shown = selected ? parts.find((p) => p.name === selected) : null;
+  return `<svg class="donut" viewBox="0 0 42 42" role="img" aria-label="Répartition des dépenses">
+      <circle cx="21" cy="21" r="15.9155" fill="none" stroke="var(--input)" stroke-width="6"/>${arcs}
+      <text x="21" y="20" class="donut-sub">${esc(shown ? shown.name : 'Dépenses')}</text>
+      <text x="21" y="25" class="donut-total">${euro(shown ? shown.total : total)}</text>
+    </svg>`;
+}
+function spendingSheet(paidOnly = false, selected = null) {
+  const ym = state.selected;
+  const parts = spendingByCategory(ym, paidOnly);
+  const total = parts.reduce((t, p) => t + p.total, 0);
+  if (selected && !parts.some((p) => p.name === selected)) selected = null;
+  const pct = (v) => (total ? `${Math.round((v / total) * 100)} %` : '');
+  const rows = parts.map((p) => {
+    const open = p.name === selected;
+    const detail = !open ? '' : `<div class="pie-detail">
+        ${p.subs.length > 1 || p.subs[0].name !== 'Sans sous-catégorie' ? p.subs.map((s) =>
+          `<div class="pie-sub"><span>${esc(s.name)}</span><span>${euro(s.total)} · ${Math.round((s.total / p.total) * 100)} %</span></div>`).join('') : ''}
+        <div class="list">${[...p.events].reverse().map(eventRow).join('')}</div>
+      </div>`;
+    return `<button type="button" class="row pie-row${open ? ' open' : ''}" data-pie-cat="${esc(p.name)}">
+        ${catIcon(p.name)}
+        <span class="body"><span class="title">${esc(p.name)}</span>
+          <span class="sub">${p.events.length} opération${p.events.length > 1 ? 's' : ''} · ${pct(p.total)}</span></span>
+        <span class="amount minus">${euro(p.total)}</span>
+      </button>${detail}`;
+  }).join('');
+  openSheet(`
+    <h3>Répartition des dépenses</h3>
+    <p class="hint" style="text-align:center;margin-top:0">${monthLabel(ym)}</p>
+    <div class="segmented pie-mode">
+      <button type="button" data-pie-mode="all" class="${paidOnly ? '' : 'on'}">Tout le mois</button>
+      <button type="button" data-pie-mode="paid" class="${paidOnly ? 'on' : ''}">Déjà dépensé</button>
+    </div>
+    ${total ? `${donutSvg(parts, total, selected)}
+      <p class="hint" style="text-align:center">Touche une catégorie pour voir son détail.</p>
+      <div class="list">${rows}</div>` : '<p class="empty">Aucune dépense pour ce mois.</p>'}
+    <p class="error-text"></p>
+    <div class="actions"><button type="button" class="primary" data-close>Fermer</button></div>`, async () => {});
+  const form = $('#sheet-form');
+  form.dataset.piePaid = paidOnly ? '1' : '';
+  form.dataset.pieCat = selected || '';
 }
 
 /** Toutes les opérations du mois choisi (année puis mois, chacun avec ses flèches). Lecture seule. */
@@ -2553,6 +2627,19 @@ document.addEventListener('click', async (event) => {
   }
   if (t.closest('#balance')) { balanceSheet(); return; }
   if (t.closest('#upcoming')) { upcomingSheet(); return; }
+  if (t.closest('#spending')) { spendingSheet(true); return; }
+  const pieMode = t.closest('[data-pie-mode]');
+  if (pieMode) { spendingSheet(pieMode.dataset.pieMode === 'paid', $('#sheet-form').dataset.pieCat || null); return; }
+  const pieCat = t.closest('[data-pie-cat]');
+  if (pieCat) {
+    const form = $('#sheet-form');
+    const name = pieCat.dataset.pieCat;
+    const top = $('#sheet').querySelector('.sheet-panel');
+    const scroll = top.scrollTop;
+    spendingSheet(form.dataset.piePaid === '1', form.dataset.pieCat === name ? null : name);
+    top.scrollTop = scroll;
+    return;
+  }
   if (t.closest('#budgets')) { budgetsSheet(); return; }
   if (t.closest('#notes')) { notesSheet(); return; }
   if (t.closest('#add-note')) { noteSheet(null); return; }

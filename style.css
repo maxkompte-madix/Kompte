@@ -224,3 +224,14 @@ textarea.input { resize: vertical; font: inherit; font-size: 16px; line-height: 
 .check-summary .warn { color: var(--orange); } .check-summary .bad { color: var(--red); font-weight: 700; } .check-summary .good { color: var(--green); font-weight: 700; }
 .check-title { margin: 18px 0 6px; font-size: 15px; }
 .check-ok { margin-top: 16px; } .check-ok summary { color: var(--muted); cursor: pointer; }
+
+/* Répartition des dépenses (anneau) */
+.pie-mode { margin: 4px 0 6px; }
+.donut { display: block; width: min(62vw, 240px); margin: 6px auto 2px; }
+.donut circle { transition: opacity .2s; }
+.donut text { fill: var(--text); text-anchor: middle; }
+.donut .donut-sub { font-size: 2.6px; fill: var(--muted); }
+.donut .donut-total { font-size: 4.6px; font-weight: 700; }
+.pie-row.open { background: var(--input); }
+.pie-detail { padding: 4px 0 8px 14px; border-left: 2px solid var(--border); margin: 0 0 6px 10px; }
+.pie-sub { display: flex; justify-content: space-between; padding: 4px 6px; color: var(--muted); font-size: 14px; }
