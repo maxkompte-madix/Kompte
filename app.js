@@ -2431,7 +2431,7 @@ function stopFixedSheet(group) {
   });
 }
 
-/** preset (nouvelle transaction) : {kind, category, account, title} — ex. verser ou retirer depuis l'onglet Épargne. */
+/** preset (nouvelle transaction) : {kind, category, account, title, amount, date, heading, card} — ex. verser ou retirer depuis l'onglet Épargne. */
 function transactionSheet(item, preset = null) {
   const editing = !!item;
   const split = editing && item.installments > 1;
@@ -2464,7 +2464,7 @@ function transactionSheet(item, preset = null) {
     </div>
     ${targetField(editing ? item.vers_compte_id : null)}
     ${cardConf(state.compte) ? `<label class="check" id="f-card-box"><input type="checkbox" id="f-card"
-      ${(editing ? cardConf(state.compte).items.has(item.id) : true) ? 'checked' : ''}> Payé par carte (débit différé)</label>` : ''}
+      ${(editing ? cardConf(state.compte).items.has(item.id) : !(preset && preset.card === false)) ? 'checked' : ''}> Payé par carte (débit différé)</label>` : ''}
     <label class="field" for="f-date">${split ? 'Date du premier paiement' : 'Date'}</label>
     <input class="input" id="f-date" type="date" value="${editing ? item.first_date : (preset && preset.date) || todayIso()}">
     ${split ? `<label class="field" for="f-count">Nombre de mensualités</label>
@@ -2679,7 +2679,7 @@ document.addEventListener('click', async (event) => {
     const op = matchBank(checkState.ops).bankOnly[Number(bankAdd.dataset.bankAdd)];
     if (op) {
       transactionSheet(null, { kind: op.cents < 0 ? 'Dépense' : 'Revenu', amount: Math.abs(op.cents), date: op.date,
-                               title: op.label.slice(0, 60), heading: 'Ajouter depuis la banque' });
+                               title: op.label.slice(0, 60), heading: 'Ajouter depuis la banque', card: false });
     }
     return;
   }
