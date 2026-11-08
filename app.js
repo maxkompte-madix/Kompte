@@ -1272,11 +1272,15 @@ function openCompte(compte) {
   state.data = scoped(state.compte);
 }
 
-function balanceOf(compte) {
+/** Solde et disponible d'un compte (calculés comme sur son tableau de bord), pour l'écran des comptes. */
+function compteOverview(compte) {
   const [data, current] = [state.data, state.compte];
   state.data = scoped(compte);
   state.compte = compte;
-  try { return getBalance(); } finally { state.data = data; state.compte = current; }
+  try {
+    const balance = getBalance();
+    return { balance, free: balance === null ? null : availableMoney(balance) };
+  } finally { state.data = data; state.compte = current; }
 }
 
 // ------------------------------------------- « Combien il me reste ? » (Siri, supabase/combien_reste.sql)
@@ -1398,11 +1402,17 @@ function renderHome() {
     return;
   }
   const rows = comptes.map((c) => {
-    const balance = balanceOf(c.id);
-    const value = balance === null ? '' : `<span class="amount ${balance >= 0 ? 'plus' : 'minus'}">${euro(balance)}</span>`;
+    const { balance, free } = compteOverview(c.id);
+    // À droite : « Reste au 26 nov. » au-dessus du disponible en gros ; le solde bancaire passe sous le nom.
+    const shown = free ? free[0] : balance;
+    const amount = shown === null ? '' : `<span class="amount ${shown >= 0 ? 'plus' : 'minus'}">${euro(shown)}</span>`;
+    const value = free
+      ? `<span class="dispo"><small>Reste au ${+free[1].slice(8, 10)} ${MONTHS[+free[1].slice(5, 7) - 1]}</small>${amount}</span>`
+      : amount;
+    const sub = free ? `<span class="sub">Solde <span class="solde">${euro(balance)}</span></span>`
+      : balance === null ? '<span class="sub">Solde non renseigné</span>' : '';
     return `<button type="button" class="row" data-compte="${c.id}">
-        <span class="body"><span class="title">${esc(c.name)}</span>
-          ${balance === null ? '<span class="sub">Solde non renseigné</span>' : ''}</span>${value}
+        <span class="body"><span class="title">${esc(c.name)}</span>${sub}</span>${value}
       </button>`;
   }).join('');
   view.innerHTML = `

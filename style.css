@@ -11,6 +11,7 @@
   --red: #f06470;
   --orange: #f5a044;
   --blue: #5aa9f0;
+  --turquoise: #2ec4cf;
   --border: #393239;
   --safe-bottom: env(safe-area-inset-bottom, 0px);
 }
@@ -235,3 +236,7 @@ textarea.input { resize: vertical; font: inherit; font-size: 16px; line-height: 
 .pie-row.open { background: var(--input); }
 .pie-detail { padding: 4px 0 8px 14px; border-left: 2px solid var(--border); margin: 0 0 6px 10px; }
 .pie-sub { display: flex; justify-content: space-between; padding: 4px 6px; color: var(--muted); font-size: 14px; }
+.dispo { flex: 0 0 auto; display: flex; flex-direction: column; align-items: flex-end; gap: 1px; }
+.dispo small { color: var(--muted); font-size: 11px; white-space: nowrap; }
+.dispo .amount { font-size: 18px; font-weight: 700; }
+.row .sub .solde { color: var(--turquoise); font-weight: 600; }
