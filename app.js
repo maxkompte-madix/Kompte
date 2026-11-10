@@ -1545,7 +1545,7 @@ function renderDashboard() {
     ${periodHint()}
     ${isToday ? '' : '<p style="text-align:center;margin:-6px 0 10px"><button type="button" class="chip" id="today">Revenir à aujourd’hui</button></p>'}
     <div class="metrics">
-      ${metric('Revenus prévus', income, 'var(--green)')}
+      ${metric('Revenus prévus ›', income, 'var(--green)', 'incomes')}
       ${metric('Dépenses prévues ›', out - paid, 'var(--red)', 'upcoming')}
       ${metric('Déjà dépensé ›', paid, 'var(--text)', 'spending')}
       <div class="metric"><small>Bilan du mois</small><b style="color:var(--blue)">${euro(income - out)}</b>
@@ -1656,6 +1656,22 @@ function upcomingSheet() {
     <h3>Dépenses prévues</h3>
     <p class="hint" style="text-align:center;margin-top:0">${monthLabel(state.selected)} · encore ${euro(total)} à payer</p>
     <div class="list" style="margin-top:12px">${events.map(eventRow).join('') || '<p class="empty">Plus aucune dépense prévue ce mois-ci.</p>'}</div>
+    <p class="error-text"></p>
+    <div class="actions"><button type="button" class="primary" data-close>Fermer</button></div>`, async () => {});
+}
+
+/** Tous les revenus du mois choisi (déjà reçus et à venir), virements reçus compris. */
+function incomeSheet() {
+  const today = todayIso();
+  const { income, events } = summary(state.selected);
+  const list = events.filter((e) => signed(e) > 0).sort((a, b) => (a.due < b.due ? -1 : a.due > b.due ? 1 : 0));
+  const received = list.filter((e) => e.due <= today).reduce((t, e) => t + e.amount, 0);
+  openSheet(`
+    <h3>Revenus prévus</h3>
+    <p class="hint" style="text-align:center;margin-top:0">${monthLabel(state.selected)} · ${euro(income)} en tout
+      ${received && received < income ? `· ${euro(received)} déjà reçus` : ''}</p>
+    ${periodHint()}
+    <div class="list" style="margin-top:12px">${list.map(eventRow).join('') || '<p class="empty">Aucun revenu ce mois-ci.</p>'}</div>
     <p class="error-text"></p>
     <div class="actions"><button type="button" class="primary" data-close>Fermer</button></div>`, async () => {});
 }
@@ -2680,6 +2696,7 @@ document.addEventListener('click', async (event) => {
   }
   if (t.closest('#balance')) { balanceSheet(); return; }
   if (t.closest('#upcoming')) { upcomingSheet(); return; }
+  if (t.closest('#incomes')) { incomeSheet(); return; }
   if (t.closest('#spending')) { spendingSheet(true); return; }
   const pieMode = t.closest('[data-pie-mode]');
   if (pieMode) { spendingSheet(pieMode.dataset.pieMode === 'paid', $('#sheet-form').dataset.pieCat || null); return; }
