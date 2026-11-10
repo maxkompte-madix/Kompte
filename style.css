@@ -251,3 +251,13 @@ textarea.input { resize: vertical; font: inherit; font-size: 16px; line-height: 
   border-top: 1px solid var(--border); color: #2ec4cf; font-size: 13px; text-align: left; }
 .cushion-line .cat { flex: 0 0 auto; }
 .cushion-line b { font-weight: 700; }
+
+/* Calcul du bilan du mois */
+.calc { background: var(--panel); border-radius: 12px; padding: 6px 14px; margin-top: 10px; }
+.calc-line { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 8px 0; font-size: 14px; }
+.calc-line b { white-space: nowrap; }
+.calc-line + .calc-line { border-top: 1px solid var(--border); }
+.calc-line.total { font-size: 16px; font-weight: 700; border-top: 2px solid var(--border); }
+.calc-title { margin: 18px 0 0; font-size: 15px; }
+.calc-more { margin-top: 10px; }
+.calc-more summary { color: var(--muted); font-size: 13px; cursor: pointer; padding: 4px 0; }

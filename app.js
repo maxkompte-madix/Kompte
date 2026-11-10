@@ -1564,11 +1564,11 @@ function renderDashboard() {
     ${periodHint()}
     ${isToday ? '' : '<p style="text-align:center;margin:-6px 0 10px"><button type="button" class="chip" id="today">Revenir à aujourd’hui</button></p>'}
     <div class="metrics">
-      ${metric('Revenus prévus ›', income, 'var(--green)', 'incomes')}
+      ${metric('Revenus prévus ›', bilanParts(ym).fixedIn, 'var(--green)', 'incomes')}
       ${metric('Dépenses prévues ›', out - paid, 'var(--red)', 'upcoming')}
       ${metric('Déjà dépensé ›', paid, 'var(--text)', 'spending')}
-      <div class="metric"><small>Bilan du mois</small><b style="color:var(--blue)">${euro(income - out)}</b>
-        ${carry === null ? '' : `<span class="carry" style="color:var(${carry >= 0 ? '--green' : '--red'})">Report du mois dernier : ${carry > 0 ? '+' : ''}${euro(carry)}</span>`}</div>
+      <button type="button" class="metric" id="bilan"><small>Bilan du mois ›</small><b style="color:var(--blue)">${euro(income - out)}</b>
+        ${carry === null ? '' : `<span class="carry" style="color:var(${carry >= 0 ? '--green' : '--red'})">Report du mois dernier : ${carry > 0 ? '+' : ''}${euro(carry)}</span>`}</button>
       ${budgetTile(ym)}
     </div>
     <button type="button" class="notes-btn" id="notes">Notes${state.data.notes.length ? ` (${state.data.notes.length})` : ''}</button>
@@ -1679,18 +1679,78 @@ function upcomingSheet() {
     <div class="actions"><button type="button" class="primary" data-close>Fermer</button></div>`, async () => {});
 }
 
-/** Tous les revenus du mois choisi (déjà reçus et à venir), virements reçus compris. */
+/** Détail du bilan d'un mois (= bilan_parts du PC). Revenus fixes = échéances de montants fixes (virements fixes reçus
+    compris) ; autres revenus = remboursements, retraits d'épargne, revenus ponctuels. Report : seulement le mois en cours. */
+function bilanParts(ym) {
+  const today = todayIso();
+  const { events } = summary(ym);
+  const p = { fixedIn: 0, otherIn: 0, paidOut: 0, futureOut: 0, fixed: [], others: [], carry: null };
+  for (const e of events) {
+    if (e.row.kind === 'Revenu') {
+      if (e.row.id < 0) { p.fixedIn += e.amount; p.fixed.push(e); } else { p.otherIn += e.amount; p.others.push(e); }
+    } else if (e.due <= today) p.paidOut += e.amount;
+    else p.futureOut += e.amount;
+  }
+  p.bilan = p.fixedIn + p.otherIn - p.paidOut - p.futureOut;
+  const balance = getBalance();
+  if (balance !== null && ym === currentMonth()) {
+    let passed = 0;
+    for (const e of occurrences(...monthPeriod(ym))) if (e.due <= today) passed += signed(e);
+    p.carry = { balance, pending: pendingDebits(), passed, total: balance + pendingDebits() - passed };
+  }
+  return p;
+}
+const byDate = (a, b) => (a.due < b.due ? -1 : a.due > b.due ? 1 : 0);
+
+/** Revenus fixes du mois choisi (salaire, virements fixes reçus…), les autres revenus sont dans le bilan. */
 function incomeSheet() {
   const today = todayIso();
-  const { income, events } = summary(state.selected);
-  const list = events.filter((e) => signed(e) > 0).sort((a, b) => (a.due < b.due ? -1 : a.due > b.due ? 1 : 0));
+  const p = bilanParts(state.selected);
+  const list = [...p.fixed].sort(byDate);
   const received = list.filter((e) => e.due <= today).reduce((t, e) => t + e.amount, 0);
   openSheet(`
     <h3>Revenus prévus</h3>
-    <p class="hint" style="text-align:center;margin-top:0">${monthLabel(state.selected)} · ${euro(income)} en tout
-      ${received && received < income ? `· ${euro(received)} déjà reçus` : ''}</p>
+    <p class="hint" style="text-align:center;margin-top:0">${monthLabel(state.selected)} · ${euro(p.fixedIn)} de revenus fixes
+      ${received && received < p.fixedIn ? `· ${euro(received)} déjà reçus` : ''}</p>
     ${periodHint()}
-    <div class="list" style="margin-top:12px">${list.map(eventRow).join('') || '<p class="empty">Aucun revenu ce mois-ci.</p>'}</div>
+    <div class="list" style="margin-top:12px">${list.map(eventRow).join('') || '<p class="empty">Aucun revenu fixe ce mois-ci.</p>'}</div>
+    ${p.otherIn ? `<p class="hint" style="margin-top:12px">Autres revenus ce mois-ci (remboursements, retraits d’épargne…) :
+      ${euro(p.otherIn)}. Ils comptent dans le bilan du mois.</p>` : ''}
+    <p class="error-text"></p>
+    <div class="actions"><button type="button" class="primary" data-close>Fermer</button></div>`, async () => {});
+}
+
+/** Le calcul du bilan du mois, ligne par ligne, et celui du report du mois dernier. */
+function bilanSheet() {
+  const ym = state.selected;
+  const p = bilanParts(ym);
+  const line = (label, value, color, strong = false, plain = false) => `<div class="calc-line${strong ? ' total' : ''}"><span>${label}</span>
+      <b style="color:var(${color})">${value > 0 && !strong && !plain ? '+' : value < 0 ? '−' : ''}${euro(Math.abs(value))}</b></div>`;
+  const others = p.others.length ? `<details class="calc-more"><summary>Voir les ${p.others.length} autre${p.others.length > 1 ? 's' : ''} revenu${p.others.length > 1 ? 's' : ''}</summary>
+      <div class="list">${[...p.others].sort(byDate).map(eventRow).join('')}</div></details>` : '';
+  const c = p.carry;
+  openSheet(`
+    <h3>Bilan du mois</h3>
+    <p class="hint" style="text-align:center;margin-top:0">${monthLabel(ym)}</p>
+    ${periodHint()}
+    <div class="calc">
+      ${line('Revenus fixes', p.fixedIn, '--green')}
+      ${p.otherIn ? line('Autres revenus (remboursements…)', p.otherIn, '--green') : ''}
+      ${line('Dépenses déjà passées', -p.paidOut, '--red')}
+      ${line('Dépenses à venir', -p.futureOut, '--red')}
+      ${line('Bilan du mois', p.bilan, '--blue', true)}
+    </div>
+    ${others}
+    <p class="hint">Revenus du mois moins toutes ses dépenses (passées et prévues). Positif : le mois rapporte plus qu’il ne coûte.</p>
+    ${c ? `<h4 class="calc-title">Report du mois dernier</h4>
+    <div class="calc">
+      ${line('Solde actuel', c.balance, '--text', false, true)}
+      ${c.pending ? line('Achats carte pas encore prélevés', c.pending, '--red') : ''}
+      ${line('Opérations déjà passées ce mois-ci (retirées)', -c.passed, c.passed >= 0 ? '--red' : '--green')}
+      ${line('Report du mois dernier', c.total, c.total >= 0 ? '--green' : '--red', true)}
+    </div>
+    <p class="hint">Ce qui restait au début du mois : l’argent réel d’aujourd’hui, sans ce qui s’est déjà passé ce mois-ci.
+      Affiché pour information, il n’est pas ajouté au disponible.</p>` : ''}
     <p class="error-text"></p>
     <div class="actions"><button type="button" class="primary" data-close>Fermer</button></div>`, async () => {});
 }
@@ -2716,6 +2776,7 @@ document.addEventListener('click', async (event) => {
   if (t.closest('#balance')) { balanceSheet(); return; }
   if (t.closest('#upcoming')) { upcomingSheet(); return; }
   if (t.closest('#incomes')) { incomeSheet(); return; }
+  if (t.closest('#bilan')) { bilanSheet(); return; }
   if (t.closest('#spending')) { spendingSheet(true); return; }
   const pieMode = t.closest('[data-pie-mode]');
   if (pieMode) { spendingSheet(pieMode.dataset.pieMode === 'paid', $('#sheet-form').dataset.pieCat || null); return; }
