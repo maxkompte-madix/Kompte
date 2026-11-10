@@ -240,7 +240,7 @@ function availableMoney(balance) {
   const periodEnd = monthPeriod(currentMonth())[1];
   let planned = 0;
   for (const e of occurrences(tomorrow, periodEnd)) if (e.row.kind === 'Dépense') planned += e.amount;
-  return [balance + pendingDebits() - planned, addDays(periodEnd, -1)];
+  return [balance + pendingDebits() - planned - reserveTotal(), addDays(periodEnd, -1)];
 }
 
 /** Ce qui restait à la fin du mois dernier : l'argent réel d'aujourd'hui (solde − achats pas encore prélevés)
@@ -409,6 +409,13 @@ function categorySheet(original = null) {
         state.all.kv.budgets = renamed;
         await check(sb.from('kv_settings').upsert({ key: 'budgets', value: renamed }, { onConflict: 'user_id,key' }));
       }
+      const reserve = state.all.kv.budget_reserve && typeof state.all.kv.budget_reserve === 'object' ? state.all.kv.budget_reserve : null;
+      if (reserve) {
+        const renamed = Object.fromEntries(Object.entries(reserve).map(([compte, keys]) => [compte, Array.isArray(keys)
+          ? keys.map((k) => (k === original ? name : typeof k === 'string' && k.startsWith(`${original}|`) ? name + k.slice(original.length) : k)) : keys]));
+        state.all.kv.budget_reserve = renamed;
+        await check(sb.from('kv_settings').upsert({ key: 'budget_reserve', value: renamed }, { onConflict: 'user_id,key' }));
+      }
     }
     await saveCategories(next);
   });
@@ -483,12 +490,12 @@ function budgetKeys() {
   }
   return keys;
 }
-/** Dépenses déjà passées d'un mois, par catégorie et « catégorie|sous-catégorie ». */
-function budgetSpent(ym) {
+/** Dépenses déjà passées d'un mois (toutes si all), par catégorie et « catégorie|sous-catégorie ». */
+function budgetSpent(ym, all = false) {
   const today = todayIso();
   const spent = {};
   for (const e of summary(ym).events) {
-    if (e.row.kind !== 'Dépense' || e.due > today) continue;
+    if (e.row.kind !== 'Dépense' || (!all && e.due > today)) continue;
     spent[e.row.category] = (spent[e.row.category] || 0) + e.amount;
     const sub = subOf(e.row);
     if (sub) {
@@ -521,6 +528,23 @@ function budgetRows(ym) {
   }
   return rows;
 }
+// Coussin : un budget « mis de côté » (réglage « budget_reserve » {compte: [clés]}). Ce qui en reste ce mois-ci
+// (budget + report − toutes ses dépenses du mois, passées et prévues) est retiré du disponible ; l'argent reste sur le compte.
+function reserveKeys(compte = state.compte) {
+  const raw = state.all && state.all.kv.budget_reserve;
+  const list = raw && typeof raw === 'object' && Array.isArray(raw[compte]) ? raw[compte] : [];
+  return new Set(list.filter((k) => typeof k === 'string'));
+}
+/** [{key, label, budget, kept}] des coussins du mois en cours (une sous-catégorie ne compte pas deux fois avec sa catégorie). */
+function reserveRows() {
+  const keys = reserveKeys();
+  if (!keys.size) return [];
+  const ym = currentMonth();
+  const all = budgetSpent(ym, true);
+  return budgetRows(ym).filter((r) => keys.has(r.key) && !(r.key.includes('|') && keys.has(r.key.split('|')[0])))
+    .map((r) => ({ ...r, kept: Math.max(0, r.budget - (all[r.key] || 0)) }));
+}
+function reserveTotal() { return reserveRows().reduce((t, r) => t + r.kept, 0); }
 /** Barre de budget : verte, orange à partir de 80 %, rouge au-delà du budget. */
 function budgetBar(spent, budget) {
   const ratio = budget > 0 ? spent / budget : 0;
@@ -529,7 +553,15 @@ function budgetBar(spent, budget) {
 }
 /** Case du tableau de bord : les sous-budgets ne comptent pas dans le total (déjà dans Alimentation). */
 function budgetTile(ym) {
-  const rows = budgetRows(ym);
+  const keys = reserveKeys();
+  const all = budgetRows(ym);
+  const rows = all.filter((r) => !keys.has(r.key));
+  const kept = ym === currentMonth() ? reserveTotal() : 0;
+  const cushion = kept ? `<span class="carry cushion">🛟 Coussin : ${euro(kept)} de côté</span>` : '';
+  if (!rows.length && all.length) {
+    return `<button type="button" class="metric wide" id="budgets"><small>Budgets du mois ›</small>
+      <b style="font-size:15px">${kept ? `Coussin : ${euro(kept)} de côté` : 'Coussin'}</b></button>`;
+  }
   if (!rows.length) {
     return `<button type="button" class="metric wide" id="budgets"><small>Budgets du mois ›</small>
       <b style="font-size:15px">Définir mes budgets par catégorie</b></button>`;
@@ -544,16 +576,18 @@ function budgetTile(ym) {
       ${budgetBar(spent, budget)}
       <span class="carry" style="color:var(${over ? '--red' : '--muted'})">${over ? `${over} budget${over > 1 ? 's' : ''} dépassé${over > 1 ? 's' : ''}`
         : `Reste ${euro(Math.max(0, budget - spent))}`}</span>
+      ${cushion}
     </button>`;
 }
 
 function budgetsSheet() {
   const ym = state.selected;
   const rows = budgetRows(ym);
+  const keys = reserveKeys();
   const lines = rows.map((r) => {
     const rest = r.budget - r.spent;
     return `<div class="budget ${r.key.includes('|') ? 'sub' : ''}">
-        <div class="pocket-line"><span>${r.key.includes('|') ? '↳ ' + esc(r.label) : catIcon(r.key) + esc(r.label)}</span>
+        <div class="pocket-line"><span>${r.key.includes('|') ? '↳ ' + esc(r.label) : catIcon(r.key) + esc(r.label)}${keys.has(r.key) ? ' <span class="tag-cushion">🛟 de côté</span>' : ''}</span>
           <span>${euro(r.spent)} <span class="pct">/ ${euro(r.budget)}</span></span></div>
         ${budgetBar(r.spent, r.budget)}
         <small style="color:var(${rest < 0 ? '--red' : '--muted'})">${rest < 0 ? `Dépassé de ${euro(-rest)}` : `Reste ${euro(rest)}`}${r.carry ? ` · dont report ${euro(r.carry)}` : ''}</small>
@@ -572,14 +606,17 @@ function budgetsSheet() {
 function budgetEditSheet() {
   const now = currentMonth();
   const budgets = budgetsOf(state.compte, now);
-  const fields = budgetKeys().map((key) => `<div class="pocket-split ${key.includes('|') ? 'sub' : ''}">
+  const keys = reserveKeys();
+  const fields = budgetKeys().map((key) => `<div class="pocket-split budget-edit ${key.includes('|') ? 'sub' : ''}">
       <span>${key.includes('|') ? '↳ ' + esc(budgetLabel(key)) : catIcon(key) + esc(key)}</span>
+      <label class="keep" title="Mettre de côté (coussin)"><input type="checkbox" data-reserve="${esc(key)}" ${keys.has(key) ? 'checked' : ''}>🛟</label>
       <input class="input" inputmode="decimal" autocomplete="off" placeholder="—" data-budget="${esc(key)}"
         value="${budgets[key] ? amountText(budgets[key]) : ''}"></div>`).join('');
   openSheet(`
     <h3>Mes budgets mensuels</h3>
     <p class="hint" style="text-align:center">Un montant par mois pour ${esc(compteName(state.compte))}. Laisse vide : pas de budget.<br>
-      Les changements valent à partir de ${monthLabel(now).toLowerCase()} ; les mois passés gardent leurs budgets.</p>
+      Les changements valent à partir de ${monthLabel(now).toLowerCase()} ; les mois passés gardent leurs budgets.<br>
+      🛟 coché = <b>coussin</b> : ce qui n'en est pas dépensé reste sur le compte mais est mis de côté (retiré du disponible).</p>
     ${fields}
     <p class="error-text"></p>
     <div class="actions">
@@ -599,6 +636,14 @@ function budgetEditSheet() {
     const value = { ...raw, [state.compte]: mine };
     state.all.kv.budgets = value;
     await check(sb.from('kv_settings').upsert({ key: 'budgets', value }, { onConflict: 'user_id,key' }));
+    const kept = [...form.querySelectorAll('input[data-reserve]:checked')].map((i) => i.dataset.reserve)
+      .filter((key) => budgetAt(mine[key] || [], now) > 0);
+    const rawReserve = state.all.kv.budget_reserve && typeof state.all.kv.budget_reserve === 'object' ? state.all.kv.budget_reserve : {};
+    if (stableJson([...reserveKeys()].sort()) !== stableJson([...kept].sort())) {
+      const reserve = { ...rawReserve, [state.compte]: kept };
+      state.all.kv.budget_reserve = reserve;
+      await check(sb.from('kv_settings').upsert({ key: 'budget_reserve', value: reserve }, { onConflict: 'user_id,key' }));
+    }
   });
 }
 
@@ -1492,7 +1537,7 @@ function renderDashboard() {
         `<span class="pending">À prélever le ${frDate(d)} : ${euro(-v)}</span>`).join('') : ''}
       ${free ? `<span class="free">Disponible jusqu’au ${+free[1].slice(8, 10)} ${MONTHS[+free[1].slice(5, 7) - 1]}
         <b style="color:var(${free[0] >= 0 ? '--green' : '--red'})">${euro(free[0])}</b>
-        <em>solde − achats pas encore prélevés − dépenses prévues d’ici là</em></span>` : ''}
+        <em>solde − achats pas encore prélevés − dépenses prévues d’ici là${reserveTotal() ? ` − coussin mis de côté (${euro(reserveTotal())})` : ''}</em></span>` : ''}
     </button>
     <div class="monthbar">
       <button type="button" class="icon-btn" data-month="-1" aria-label="Mois précédent">‹</button>

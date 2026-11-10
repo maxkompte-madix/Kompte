@@ -240,3 +240,11 @@ textarea.input { resize: vertical; font: inherit; font-size: 16px; line-height: 
 .dispo small { color: var(--muted); font-size: 11px; white-space: nowrap; }
 .dispo .amount { font-size: 18px; font-weight: 700; }
 .row .sub .solde { color: var(--turquoise); font-weight: 600; }
+
+/* Coussin (budget mis de côté) */
+.pocket-split.budget-edit { grid-template-columns: minmax(0, 1fr) auto 110px; }
+.budget-edit .keep { display: flex; align-items: center; gap: 2px; font-size: 15px; opacity: .55; }
+.budget-edit .keep:has(input:checked) { opacity: 1; }
+.budget-edit .keep input { width: 18px; height: 18px; margin: 0; accent-color: var(--accent, #22D3EE); }
+.metric .cushion { color: #2ec4cf; }
+.tag-cushion { font-size: 11px; color: #2ec4cf; margin-left: 6px; }
