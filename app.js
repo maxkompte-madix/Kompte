@@ -142,16 +142,17 @@ function categories() {
     for (const c of saved.categories) {
       const name = String(c.name || '').trim();
       if (!name || list.some((x) => x.name === name) || !/^#[0-9a-fA-F]{6}$/.test(String(c.color))) continue;
-      list.push({ name, color: c.color, icon: c.icon || 'Divers', savings: hasFlag ? !!c.savings : name === 'Épargne',
+      const savings = hasFlag ? !!c.savings : name === 'Épargne';
+      list.push({ name, color: c.color, icon: c.icon || 'Divers', savings, cushion: !savings && !!c.cushion,
                   subs: cleanSubs(c.subs) || DEFAULT_SUBS[name] || [] });
     }
   }
   if (list.length) return list;
   return Object.entries(DEFAULT_COLORS).map(([name, color]) => ({ name, color, icon: name, savings: name === 'Épargne',
-                                                                  subs: DEFAULT_SUBS[name] || [] }));
+                                                                  cushion: false, subs: DEFAULT_SUBS[name] || [] }));
 }
 function category(name) {
-  return categories().find((c) => c.name === name) || { name, color: '#9CA3AF', icon: 'Divers', savings: false, subs: [] };
+  return categories().find((c) => c.name === name) || { name, color: '#9CA3AF', icon: 'Divers', savings: false, cushion: false, subs: [] };
 }
 function iconSlug(icon) { return icon.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase(); }
 function catIcon(name) {
@@ -311,7 +312,7 @@ function paySheet(reminder) {
 // Une catégorie : {name, color, icon, savings, subs: [{id, name}]} dans le réglage partagé « categories ».
 // Une opération garde l'id de sa sous-catégorie dans « meal_tags » {transaction: id} (nom d'origine : les repas).
 const DEFAULT_SUBS = { Alimentation: [{ id: 'midi', name: 'Repas du midi' }, { id: 'resto', name: 'Restaurant' }] };
-const ICONS = Object.keys(DEFAULT_COLORS);
+const ICONS = [...Object.keys(DEFAULT_COLORS).filter((n) => n !== 'Divers'), 'Coussin', 'Divers'];
 function cleanSubs(subs) {
   if (!Array.isArray(subs)) return null;
   const seen = new Set();
@@ -342,7 +343,7 @@ async function setSub(itemId, subId, fixed = false) {
 async function saveCategories(list) {
   const raw = state.all.kv.categories && typeof state.all.kv.categories === 'object' ? state.all.kv.categories : {};
   const value = { ...raw, categories: list.map((c) => ({ name: c.name, color: c.color, icon: c.icon, savings: !!c.savings,
-                                                           subs: c.subs || [] })) };
+                                                           cushion: !c.savings && !!c.cushion, subs: c.subs || [] })) };
   state.all.kv.categories = value;
   await check(sb.from('kv_settings').upsert({ key: 'categories', value }, { onConflict: 'user_id,key' }));
 }
@@ -365,7 +366,7 @@ function subRow(s) {
 }
 
 function categorySheet(original = null) {
-  const c = original ? category(original) : { name: '', color: '#22D3EE', icon: 'Divers', savings: false, subs: [] };
+  const c = original ? category(original) : { name: '', color: '#22D3EE', icon: 'Divers', savings: false, cushion: false, subs: [] };
   openSheet(`
     <h3>${original ? 'Modifier la catégorie' : 'Nouvelle catégorie'}</h3>
     <label class="field" for="c-name">Nom</label>
@@ -375,6 +376,7 @@ function categorySheet(original = null) {
     <label class="field" for="c-color">Couleur</label>
     <input class="input color" id="c-color" type="color" value="${c.color.toLowerCase()}">
     <label class="check"><input type="checkbox" id="c-savings" ${c.savings ? 'checked' : ''}> Virements vers un compte épargne</label>
+    <label class="check"><input type="checkbox" id="c-cushion" ${c.cushion ? 'checked' : ''}> 🛟 Coussin : son budget non dépensé reste sur le compte, mis de côté</label>
     <label class="field">Sous-catégories</label>
     <p class="hint">Facultatives : à choisir sur une opération de cette catégorie (ex. Restaurant). Elles peuvent avoir un budget.</p>
     <div id="c-subs">${c.subs.map(subRow).join('')}</div>
@@ -395,7 +397,8 @@ function categorySheet(original = null) {
       return { id: row.dataset.sub || String(newId()), name: subName };
     });
     const entry = { name, color: form.querySelector('#c-color').value.toUpperCase(), icon: form.querySelector('#c-icon').value,
-                    savings: form.querySelector('#c-savings').checked, subs };
+                    savings: form.querySelector('#c-savings').checked,
+                    cushion: !form.querySelector('#c-savings').checked && form.querySelector('#c-cushion').checked, subs };
     const next = original ? list.map((x) => (x.name === original ? entry : x)) : [...list, entry];
     if (original && name !== original) {
       // Renommage : l'historique suit (transactions, montants fixes de tous les comptes, budgets).
@@ -409,17 +412,23 @@ function categorySheet(original = null) {
         state.all.kv.budgets = renamed;
         await check(sb.from('kv_settings').upsert({ key: 'budgets', value: renamed }, { onConflict: 'user_id,key' }));
       }
-      const reserve = state.all.kv.budget_reserve && typeof state.all.kv.budget_reserve === 'object' ? state.all.kv.budget_reserve : null;
-      if (reserve) {
-        const renamed = Object.fromEntries(Object.entries(reserve).map(([compte, keys]) => [compte, Array.isArray(keys)
-          ? keys.map((k) => (k === original ? name : typeof k === 'string' && k.startsWith(`${original}|`) ? name + k.slice(original.length) : k)) : keys]));
-        state.all.kv.budget_reserve = renamed;
-        await check(sb.from('kv_settings').upsert({ key: 'budget_reserve', value: renamed }, { onConflict: 'user_id,key' }));
-      }
     }
     await saveCategories(next);
   });
   const form = $('#sheet-form');
+  const savingsBox = form.querySelector('#c-savings'), cushionBox = form.querySelector('#c-cushion');
+  // Épargne (virement vers un autre compte) et coussin (l'argent reste ici) ne vont pas ensemble.
+  savingsBox.addEventListener('change', () => { if (savingsBox.checked) cushionBox.checked = false; });
+  cushionBox.addEventListener('change', () => { if (cushionBox.checked) savingsBox.checked = false; });
+  if (!original) {
+    // Une catégorie nommée « Coussin » prend d'elle-même son pictogramme et la bouée.
+    form.querySelector('#c-name').addEventListener('input', (e) => {
+      if (e.target.value.trim().toLowerCase() !== 'coussin') return;
+      form.querySelector('#c-icon').value = 'Coussin';
+      cushionBox.checked = true;
+      savingsBox.checked = false;
+    });
+  }
   const box = form.querySelector('#c-subs');
   box.addEventListener('click', (e) => { const b = e.target.closest('button'); if (b) b.closest('.sub-edit').remove(); });
   form.querySelector('#c-add-sub').addEventListener('click', () => {
@@ -528,12 +537,10 @@ function budgetRows(ym) {
   }
   return rows;
 }
-// Coussin : un budget « mis de côté » (réglage « budget_reserve » {compte: [clés]}). Ce qui en reste ce mois-ci
-// (budget + report − toutes ses dépenses du mois, passées et prévues) est retiré du disponible ; l'argent reste sur le compte.
-function reserveKeys(compte = state.compte) {
-  const raw = state.all && state.all.kv.budget_reserve;
-  const list = raw && typeof raw === 'object' && Array.isArray(raw[compte]) ? raw[compte] : [];
-  return new Set(list.filter((k) => typeof k === 'string'));
+// Coussin : le budget d'une catégorie « coussin » 🛟 (case de la catégorie). Ce qui en reste ce mois-ci (budget + report
+// − toutes ses dépenses du mois, passées et prévues) est retiré du disponible ; l'argent reste sur le compte.
+function reserveKeys() {
+  return new Set(categories().filter((c) => c.cushion).map((c) => c.name));
 }
 /** [{key, label, budget, kept}] des coussins du mois en cours (une sous-catégorie ne compte pas deux fois avec sa catégorie). */
 function reserveRows() {
@@ -607,16 +614,14 @@ function budgetEditSheet() {
   const now = currentMonth();
   const budgets = budgetsOf(state.compte, now);
   const keys = reserveKeys();
-  const fields = budgetKeys().map((key) => `<div class="pocket-split budget-edit ${key.includes('|') ? 'sub' : ''}">
-      <span>${key.includes('|') ? '↳ ' + esc(budgetLabel(key)) : catIcon(key) + esc(key)}</span>
-      <label class="keep" title="Mettre de côté (coussin)"><input type="checkbox" data-reserve="${esc(key)}" ${keys.has(key) ? 'checked' : ''}>🛟</label>
+  const fields = budgetKeys().map((key) => `<div class="pocket-split ${key.includes('|') ? 'sub' : ''}">
+      <span>${key.includes('|') ? '↳ ' + esc(budgetLabel(key)) : catIcon(key) + esc(key)}${keys.has(key) ? ' <span class="tag-cushion">🛟 coussin</span>' : ''}</span>
       <input class="input" inputmode="decimal" autocomplete="off" placeholder="—" data-budget="${esc(key)}"
         value="${budgets[key] ? amountText(budgets[key]) : ''}"></div>`).join('');
   openSheet(`
     <h3>Mes budgets mensuels</h3>
     <p class="hint" style="text-align:center">Un montant par mois pour ${esc(compteName(state.compte))}. Laisse vide : pas de budget.<br>
-      Les changements valent à partir de ${monthLabel(now).toLowerCase()} ; les mois passés gardent leurs budgets.<br>
-      🛟 coché = <b>coussin</b> : ce qui n'en est pas dépensé reste sur le compte mais est mis de côté (retiré du disponible).</p>
+      Les changements valent à partir de ${monthLabel(now).toLowerCase()} ; les mois passés gardent leurs budgets.</p>
     ${fields}
     <p class="error-text"></p>
     <div class="actions">
@@ -636,14 +641,6 @@ function budgetEditSheet() {
     const value = { ...raw, [state.compte]: mine };
     state.all.kv.budgets = value;
     await check(sb.from('kv_settings').upsert({ key: 'budgets', value }, { onConflict: 'user_id,key' }));
-    const kept = [...form.querySelectorAll('input[data-reserve]:checked')].map((i) => i.dataset.reserve)
-      .filter((key) => budgetAt(mine[key] || [], now) > 0);
-    const rawReserve = state.all.kv.budget_reserve && typeof state.all.kv.budget_reserve === 'object' ? state.all.kv.budget_reserve : {};
-    if (stableJson([...reserveKeys()].sort()) !== stableJson([...kept].sort())) {
-      const reserve = { ...rawReserve, [state.compte]: kept };
-      state.all.kv.budget_reserve = reserve;
-      await check(sb.from('kv_settings').upsert({ key: 'budget_reserve', value: reserve }, { onConflict: 'user_id,key' }));
-    }
   });
 }
 
@@ -1324,7 +1321,7 @@ function compteOverview(compte) {
   state.compte = compte;
   try {
     const balance = getBalance();
-    return { balance, free: balance === null ? null : availableMoney(balance) };
+    return { balance, free: balance === null ? null : availableMoney(balance), kept: balance === null ? 0 : reserveTotal() };
   } finally { state.data = data; state.compte = current; }
 }
 
@@ -1447,12 +1444,13 @@ function renderHome() {
     return;
   }
   const rows = comptes.map((c) => {
-    const { balance, free } = compteOverview(c.id);
+    const { balance, free, kept } = compteOverview(c.id);
     // À droite : « Reste au 26 nov. » au-dessus du disponible en gros ; le solde bancaire passe sous le nom.
     const shown = free ? free[0] : balance;
     const amount = shown === null ? '' : `<span class="amount ${shown >= 0 ? 'plus' : 'minus'}">${euro(shown)}</span>`;
     const value = free
-      ? `<span class="dispo"><small>Reste au ${+free[1].slice(8, 10)} ${MONTHS[+free[1].slice(5, 7) - 1]}</small>${amount}</span>`
+      ? `<span class="dispo"><small>Reste au ${+free[1].slice(8, 10)} ${MONTHS[+free[1].slice(5, 7) - 1]}</small>${amount}${kept
+        ? `<small class="cushion">🛟 Coussin : ${euro(kept)}</small>` : ''}</span>`
       : amount;
     const sub = free ? `<span class="sub">Solde <span class="solde">${euro(balance)}</span></span>`
       : balance === null ? '<span class="sub">Solde non renseigné</span>' : '';
