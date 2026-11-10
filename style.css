@@ -245,3 +245,9 @@ textarea.input { resize: vertical; font: inherit; font-size: 16px; line-height: 
 .metric .cushion { color: #2ec4cf; }
 .tag-cushion { font-size: 11px; color: #2ec4cf; margin-left: 6px; }
 .dispo .cushion { color: #2ec4cf; }
+/* Écran des comptes : ligne du coussin sous le nom et le reste (le bouton passe à la ligne) */
+.row:has(.cushion-line) { flex-wrap: wrap; }
+.cushion-line { flex: 1 0 100%; display: flex; align-items: center; gap: 8px; margin-top: 8px; padding-top: 8px;
+  border-top: 1px solid var(--border); color: #2ec4cf; font-size: 13px; text-align: left; }
+.cushion-line .cat { flex: 0 0 auto; }
+.cushion-line b { font-weight: 700; }

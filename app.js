@@ -236,12 +236,29 @@ function pendingDebits() { return pendingByDate().reduce((sum, [, v]) => sum + v
 
 /** Argent réellement disponible jusqu'à la fin de la période en cours :
     solde − achats pas encore prélevés − dépenses prévues d'ici là. */
-function availableMoney(balance) {
+function rawAvailable(balance) {
   const tomorrow = addDays(todayIso(), 1);
   const periodEnd = monthPeriod(currentMonth())[1];
   let planned = 0;
   for (const e of occurrences(tomorrow, periodEnd)) if (e.row.kind === 'Dépense') planned += e.amount;
-  return [balance + pendingDebits() - planned - reserveTotal(), addDays(periodEnd, -1)];
+  return [balance + pendingDebits() - planned, addDays(periodEnd, -1)];
+}
+/** Disponible moins le coussin, qui ne le fait jamais passer sous zéro (voir cushionKept). */
+function availableMoney(balance) {
+  const [raw, until] = rawAvailable(balance);
+  return [raw - cushionKept(raw), until];
+}
+/** Coussin réellement de côté : jamais plus que ce qui reste vraiment (s'il manque de l'argent, le coussin a servi). */
+function cushionKept(raw) { return Math.min(reserveTotal(), Math.max(0, raw)); }
+/** Coussin du compte ouvert, ajusté au vrai reste ; null si aucune catégorie coussin n'a de budget. */
+function cushionNow() {
+  if (!reserveRows().length) return null;
+  const balance = getBalance();
+  return balance === null ? reserveTotal() : cushionKept(rawAvailable(balance)[0]);
+}
+function cushionMessage(cents) {
+  return cents < 2000 ? 'Il est pas trop confort là' : cents < 5000 ? 'Tu vas dormir tranquillement'
+    : cents < 10000 ? 'À l’aise Blaise' : 'T’as mis des liasses dedans ?!';
 }
 
 /** Ce qui restait à la fin du mois dernier : l'argent réel d'aujourd'hui (solde − achats pas encore prélevés)
@@ -563,7 +580,7 @@ function budgetTile(ym) {
   const keys = reserveKeys();
   const all = budgetRows(ym);
   const rows = all.filter((r) => !keys.has(r.key));
-  const kept = ym === currentMonth() ? reserveTotal() : 0;
+  const kept = ym === currentMonth() ? cushionNow() || 0 : 0;
   const cushion = kept ? `<span class="carry cushion">🛟 Coussin : ${euro(kept)} de côté</span>` : '';
   if (!rows.length && all.length) {
     return `<button type="button" class="metric wide" id="budgets"><small>Budgets du mois ›</small>
@@ -1321,7 +1338,7 @@ function compteOverview(compte) {
   state.compte = compte;
   try {
     const balance = getBalance();
-    return { balance, free: balance === null ? null : availableMoney(balance), kept: balance === null ? 0 : reserveTotal() };
+    return { balance, free: balance === null ? null : availableMoney(balance), kept: cushionNow() };
   } finally { state.data = data; state.compte = current; }
 }
 
@@ -1449,13 +1466,15 @@ function renderHome() {
     const shown = free ? free[0] : balance;
     const amount = shown === null ? '' : `<span class="amount ${shown >= 0 ? 'plus' : 'minus'}">${euro(shown)}</span>`;
     const value = free
-      ? `<span class="dispo"><small>Reste au ${+free[1].slice(8, 10)} ${MONTHS[+free[1].slice(5, 7) - 1]}</small>${amount}${kept
-        ? `<small class="cushion">🛟 Coussin : ${euro(kept)}</small>` : ''}</span>`
+      ? `<span class="dispo"><small>Reste au ${+free[1].slice(8, 10)} ${MONTHS[+free[1].slice(5, 7) - 1]}</small>${amount}</span>`
       : amount;
+    const cushion = kept === null || kept === undefined ? '' : `<span class="cushion-line">
+        <span class="cat" style="--c:#2EC4CF;--i:url('icons/cat/coussin.png')"></span>
+        <span><b>Coussin : ${euro(kept)} !</b> ${cushionMessage(kept)}</span></span>`;
     const sub = free ? `<span class="sub">Solde <span class="solde">${euro(balance)}</span></span>`
       : balance === null ? '<span class="sub">Solde non renseigné</span>' : '';
     return `<button type="button" class="row" data-compte="${c.id}">
-        <span class="body"><span class="title">${esc(c.name)}</span>${sub}</span>${value}
+        <span class="body"><span class="title">${esc(c.name)}</span>${sub}</span>${value}${cushion}
       </button>`;
   }).join('');
   view.innerHTML = `
@@ -1535,7 +1554,7 @@ function renderDashboard() {
         `<span class="pending">À prélever le ${frDate(d)} : ${euro(-v)}</span>`).join('') : ''}
       ${free ? `<span class="free">Disponible jusqu’au ${+free[1].slice(8, 10)} ${MONTHS[+free[1].slice(5, 7) - 1]}
         <b style="color:var(${free[0] >= 0 ? '--green' : '--red'})">${euro(free[0])}</b>
-        <em>solde − achats pas encore prélevés − dépenses prévues d’ici là${reserveTotal() ? ` − coussin mis de côté (${euro(reserveTotal())})` : ''}</em></span>` : ''}
+        <em>solde − achats pas encore prélevés − dépenses prévues d’ici là${cushionNow() ? ` − coussin mis de côté (${euro(cushionNow())})` : ''}</em></span>` : ''}
     </button>
     <div class="monthbar">
       <button type="button" class="icon-btn" data-month="-1" aria-label="Mois précédent">‹</button>
