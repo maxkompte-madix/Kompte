@@ -1792,6 +1792,7 @@ function donutSvg(parts, total, selected) {
       <text x="21" y="25" class="donut-total">${euro(shown ? shown.total : total)}</text>
     </svg>`;
 }
+let pieView = { paid: true, cat: null };
 function spendingSheet(paidOnly = false, selected = null) {
   const ym = state.selected;
   const parts = spendingByCategory(ym, paidOnly);
@@ -1824,9 +1825,9 @@ function spendingSheet(paidOnly = false, selected = null) {
       <div class="list">${rows}</div>` : '<p class="empty">Aucune dépense pour ce mois.</p>'}
     <p class="error-text"></p>
     <div class="actions"><button type="button" class="primary" data-close>Fermer</button></div>`, async () => {});
-  const form = $('#sheet-form');
-  form.dataset.piePaid = paidOnly ? '1' : '';
-  form.dataset.pieCat = selected || '';
+  // État de la fenêtre gardé à part : un attribut posé sur le formulaire y resterait pour les fenêtres suivantes
+  // (un clic dans une transaction était alors pris pour un clic sur une catégorie du graphique).
+  pieView = { paid: paidOnly, cat: selected };
 }
 
 /** Toutes les opérations du mois choisi (année puis mois, chacun avec ses flèches). Lecture seule. */
@@ -2265,7 +2266,13 @@ function openSheet(html, onSubmit) {
     }
   };
 }
-function closeSheet() { $('#sheet').hidden = true; $('#sheet-form').innerHTML = ''; }
+function closeSheet() {
+  const form = $('#sheet-form');
+  $('#sheet').hidden = true;
+  form.innerHTML = '';
+  // Une fenêtre ne laisse rien derrière elle sur le formulaire partagé (attributs data-*).
+  for (const key of Object.keys(form.dataset)) delete form.dataset[key];
+}
 
 function categoryPicker(selected) {
   return `<div class="cats" id="cats">${categories().map((c) =>
@@ -2779,14 +2786,13 @@ document.addEventListener('click', async (event) => {
   if (t.closest('#bilan')) { bilanSheet(); return; }
   if (t.closest('#spending')) { spendingSheet(true); return; }
   const pieMode = t.closest('[data-pie-mode]');
-  if (pieMode) { spendingSheet(pieMode.dataset.pieMode === 'paid', $('#sheet-form').dataset.pieCat || null); return; }
+  if (pieMode) { spendingSheet(pieMode.dataset.pieMode === 'paid', pieView.cat); return; }
   const pieCat = t.closest('[data-pie-cat]');
   if (pieCat) {
-    const form = $('#sheet-form');
     const name = pieCat.dataset.pieCat;
     const top = $('#sheet').querySelector('.sheet-panel');
     const scroll = top.scrollTop;
-    spendingSheet(form.dataset.piePaid === '1', form.dataset.pieCat === name ? null : name);
+    spendingSheet(pieView.paid, pieView.cat === name ? null : name);
     top.scrollTop = scroll;
     return;
   }
