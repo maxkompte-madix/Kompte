@@ -593,7 +593,8 @@ function budgetTile(ym) {
   const main = rows.filter((r) => !r.key.includes('|'));
   const spent = main.reduce((t, r) => t + r.spent, 0);
   const budget = main.reduce((t, r) => t + r.budget, 0);
-  const over = rows.filter((r) => r.spent > r.budget).length;
+  // Une catégorie dépassée compte une seule fois, même si sa sous-catégorie l'est aussi (ou seule la sous-catégorie).
+  const over = new Set(rows.filter((r) => r.spent > r.budget).map((r) => r.key.split('|')[0])).size;
   return `<button type="button" class="metric wide" id="budgets">
       <small>Budgets du mois ›</small>
       <b>${euro(spent)} <span class="of">sur ${euro(budget)}</span></b>
@@ -1549,7 +1550,7 @@ function renderDashboard() {
     <button type="button" class="hero" id="balance">
       <small>SOLDE ACTUEL</small>
       <strong>${balance === null ? '— €' : euro(balance)}</strong>
-      <span>${ref ? `Depuis le ${frDate(ref.as_of)} · touche pour modifier` : 'Touche ici pour saisir ton solde bancaire actuel'}</span>
+      <span>${ref ? `Depuis le ${frDate(ref.as_of)} · appui long pour modifier` : 'Touche ici pour saisir ton solde bancaire actuel'}</span>
       ${balance !== null ? pendingByDate().slice(0, 3).filter(([, v]) => v).map(([d, v]) =>
         `<span class="pending">À prélever le ${frDate(d)} : ${euro(-v)}</span>`).join('') : ''}
       ${free ? `<span class="free">Disponible jusqu’au ${+free[1].slice(8, 10)} ${MONTHS[+free[1].slice(5, 7) - 1]}
@@ -2760,6 +2761,35 @@ function toast(text) {
 }
 
 // ------------------------------------------------------------- événements
+/** Appui long (0,6 s) sur la case « Solde actuel » pour modifier le solde ; un doigt qui glisse annule. */
+const balanceHold = { timer: null, x: 0, y: 0, opened: false };
+function stopBalanceHold() {
+  clearTimeout(balanceHold.timer);
+  balanceHold.timer = null;
+  const hero = $('#balance');
+  if (hero) hero.classList.remove('holding');
+}
+document.addEventListener('pointerdown', (event) => {
+  const hero = event.target.closest('#balance');
+  if (!hero || !balanceReference()) return;
+  stopBalanceHold();
+  balanceHold.opened = false;
+  balanceHold.x = event.clientX;
+  balanceHold.y = event.clientY;
+  hero.classList.add('holding');
+  balanceHold.timer = setTimeout(() => {
+    stopBalanceHold();
+    balanceHold.opened = true;
+    if (navigator.vibrate) navigator.vibrate(30);
+    balanceSheet();
+  }, 600);
+});
+document.addEventListener('pointermove', (event) => {
+  if (balanceHold.timer && Math.hypot(event.clientX - balanceHold.x, event.clientY - balanceHold.y) > 10) stopBalanceHold();
+});
+for (const name of ['pointerup', 'pointercancel']) document.addEventListener(name, () => { if (balanceHold.timer) stopBalanceHold(); });
+document.addEventListener('contextmenu', (event) => { if (event.target.closest('#balance')) event.preventDefault(); });
+
 document.addEventListener('click', async (event) => {
   const t = event.target;
   if (t.closest('[data-close]')) { closeSheet(); return; }
@@ -2780,7 +2810,13 @@ document.addEventListener('click', async (event) => {
     render();
     return;
   }
-  if (t.closest('#balance')) { balanceSheet(); return; }
+  if (t.closest('#balance')) {
+    // Solde déjà saisi : seul un appui long l'ouvre (évite les fausses manipulations).
+    if (balanceHold.opened) { balanceHold.opened = false; return; }
+    if (balanceReference()) { toast('Appuie longuement sur le solde pour le modifier.'); return; }
+    balanceSheet();
+    return;
+  }
   if (t.closest('#upcoming')) { upcomingSheet(); return; }
   if (t.closest('#incomes')) { incomeSheet(); return; }
   if (t.closest('#bilan')) { bilanSheet(); return; }

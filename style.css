@@ -53,6 +53,10 @@ h2 { font-size: 18px; margin: 22px 0 10px; }
 .hero small { color: var(--muted); font-weight: 700; font-size: 11px; letter-spacing: .6px; }
 .hero strong { display: block; font-size: 34px; margin: 4px 0 2px; }
 .hero span { color: var(--muted); font-size: 12px; }
+.hero { -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; position: relative; overflow: hidden; }
+/* Pendant l'appui long : une barre se remplit en bas de la case. */
+.hero::after { content: ''; position: absolute; left: 0; bottom: 0; height: 3px; width: 0; background: var(--blue); }
+.hero.holding::after { width: 100%; transition: width .6s linear; }
 
 .monthbar { display: flex; align-items: center; gap: 8px; margin: 18px 0 12px; }
 .monthbar .label { flex: 1; text-align: center; font-weight: 700; font-size: 17px; }
