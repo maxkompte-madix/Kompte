@@ -37,7 +37,7 @@ const state = {
   data: null,       // les mêmes, réduites au compte ouvert
   compte: null,     // numéro du compte ouvert (null : écran d'accueil)
   version: null,
-  tab: 'dashboard',
+  tab: 'menu',
   selected: todayIso().slice(0, 7),
   current: null,    // mois en cours à la dernière actualisation de l'écran
   query: '',
@@ -50,6 +50,33 @@ const state = {
 };
 
 const $ = (sel) => document.querySelector(sel);
+
+// ------------------------------------------------ préférences de ce téléphone
+// Thème, page d'ouverture et petites aides : propres à chaque téléphone (rien en ligne).
+function prefs() {
+  try { return { theme: 'dark', start: 'menu', help: true, ...JSON.parse(localStorage.getItem('kompte-prefs') || '{}') }; }
+  catch (e) { return { theme: 'dark', start: 'menu', help: true }; }
+}
+function setPref(key, value) {
+  try { localStorage.setItem('kompte-prefs', JSON.stringify({ ...prefs(), [key]: value })); } catch (e) { /* navigation privée */ }
+}
+function applyTheme() {
+  const theme = prefs().theme;
+  document.documentElement.dataset.theme = theme;
+  const meta = document.querySelector('meta[name=theme-color]');
+  if (meta) meta.content = theme === 'rose' ? '#ffe3f0' : '#0b0b0d';
+}
+
+/** Pages : nom affiché et petite aide en haut (masquable dans Réglages). */
+const PAGES = {
+  menu: { label: 'Accueil' },
+  dashboard: { label: 'Mon mois', help: 'Ton mois en un coup d’œil. Touche une case pour voir le détail, ‹ › pour changer de mois, + pour ajouter une dépense.' },
+  transactions: { label: 'Opérations', help: 'Toutes les dépenses et rentrées du mois. Touche une ligne pour la modifier ; cherche un mot ou filtre par catégorie.' },
+  fixed: { label: 'Montants fixes', help: 'Ce qui revient chaque mois (salaire, loyer, abonnements…). Touche une ligne pour la modifier, changer un seul mois ou l’arrêter.' },
+  savings: { label: 'Épargne', help: 'Tes comptes d’épargne. « + Verser » ou « − Retirer » pour bouger de l’argent ; les poches le répartissent par projet.' },
+  check: { label: 'Vérifier', help: 'Télécharge le relevé sur le site de ta banque (OFX, CSV ou QIF) et choisis-le ici : Kompte montre ce qui manque. Rien n’est enregistré.' },
+  account: { label: 'Réglages', help: 'Les choix « Sur ce téléphone » ne changent que ce téléphone ; les autres sont partagés avec le PC.' },
+};
 const view = $('#view');
 
 // ------------------------------------------------------------------ outils
@@ -1407,13 +1434,13 @@ async function refresh(force = false) {
     }
     state.syncError = false;
     try { await saveSiriSummary(); } catch (e) { /* facultatif : ne bloque jamais la synchro */ }
-    if (!state.checked) { state.checked = true; if (state.tab === 'dashboard') render(); }
+    if (!state.checked) { state.checked = true; if (['dashboard', 'menu'].includes(state.tab)) render(); }
     const now = new Date();
     setSync(`À jour · ${pad(now.getHours())}:${pad(now.getMinutes())}`);
   } catch (e) {
     state.syncError = true;
     setSync('Hors ligne', true);
-    if (!state.checked) { state.checked = true; if (state.all && state.tab === 'dashboard') render(); }
+    if (!state.checked) { state.checked = true; if (state.all && ['dashboard', 'menu'].includes(state.tab)) render(); }
   } finally {
     state.loading = false;
   }
@@ -1432,7 +1459,11 @@ function render() {
   $('#tabs').hidden = home;
   $('#switch').hidden = home;
   $('#fab').hidden = true;
-  if (home) { renderHome(); return; }
+  // Le logo ramène toujours à l'accueil : ailleurs, il le dit (« ‹ Accueil »).
+  const atMenu = home || state.tab === 'menu';
+  $('#home-text').textContent = atMenu ? 'KOMPTE' : '‹ Accueil';
+  $('#home').classList.toggle('back', !atMenu);
+  if (home) { renderHome(); armBack(); return; }
   // Le mois en cours suit la date et le réglage : l'affichage bascule tout seul.
   const current = currentMonth();
   if (state.current !== current) {
@@ -1442,13 +1473,83 @@ function render() {
   $('#switch').textContent = state.all.comptes.find((c) => c.id === state.compte).name;
   document.querySelectorAll('#tabs button').forEach((b) => b.classList.toggle('active', b.dataset.tab === state.tab));
   $('#fab').hidden = state.tab !== 'dashboard'; // Transactions : lecture seule
-  if (state.tab === 'transactions') renderTransactions();
+  if (state.tab === 'menu') renderMenu();
+  else if (state.tab === 'transactions') renderTransactions();
   else if (state.tab === 'fixed') renderFixed();
   else if (state.tab === 'savings') renderSavings();
   else if (state.tab === 'check') renderCheck();
   else if (state.tab === 'account') renderAccount();
   else renderDashboard();
+  pageHelp();
+  armBack();
 }
+
+/** Petite aide en haut de la page (sous le titre s'il y en a un). */
+function pageHelp() {
+  const page = PAGES[state.tab];
+  if (!page || !page.help || !prefs().help) return;
+  const html = `<p class="page-help">💡 ${esc(page.help)}</p>`;
+  const first = view.firstElementChild;
+  if (first && first.tagName === 'H2') first.insertAdjacentHTML('afterend', html);
+  else view.insertAdjacentHTML('afterbegin', html);
+}
+
+/** Accueil d'un compte : ce qui reste, un gros bouton pour ajouter, et une tuile par page. */
+function renderMenu() {
+  const balance = getBalance();
+  const free = balance === null ? null : availableMoney(balance);
+  const hour = new Date().getHours();
+  const hello = hour >= 18 || hour < 5 ? 'Bonsoir' : 'Bonjour';
+  const summaryCard = balance === null
+    ? `<button type="button" class="hero menu-hero" data-go="dashboard"><small>SOLDE ACTUEL</small>
+        <strong>— €</strong><span>Touche ici puis sur la case du solde pour saisir ton solde bancaire.</span></button>`
+    : free
+      ? `<button type="button" class="hero menu-hero" data-go="dashboard"><small>IL TE RESTE JUSQU’AU ${+free[1].slice(8, 10)} ${MONTHS[+free[1].slice(5, 7) - 1].toUpperCase()}</small>
+          <strong style="color:var(${free[0] >= 0 ? '--green' : '--red'})">${euro(free[0])}</strong>
+          <span>Solde en banque : ${euro(balance)} · touche pour le détail ›</span></button>`
+      : `<button type="button" class="hero menu-hero" data-go="dashboard"><small>SOLDE ACTUEL</small>
+          <strong>${euro(balance)}</strong><span>Touche pour le détail du mois ›</span></button>`;
+  const notes = state.data.notes.length;
+  const tiles = [
+    ['dashboard', '📊', 'Mon mois', 'Solde, ce qui reste, bilan', 'pink'],
+    ['transactions', '📋', 'Opérations', 'Toutes les dépenses du mois', 'lilac'],
+    ['fixed', '🔁', 'Montants fixes', 'Loyer, salaire, abonnements', 'peach'],
+    ['savings', '🐷', 'Épargne', 'Livrets et poches', 'mint'],
+    ['sheet:budgets', '🎯', 'Budgets', 'Combien dépenser par catégorie', 'sky'],
+    ['sheet:spending', '🍩', 'Répartition', 'Où part mon argent', 'rose'],
+    ['sheet:notes', '📝', notes ? `Notes (${notes})` : 'Notes', 'Pense-bêtes et calculs', 'lemon'],
+    ['check', '🏦', 'Vérifier', 'Comparer avec la banque', 'silver'],
+    ['account', '⚙️', 'Réglages', 'Couleurs, mois, catégories', 'silver'],
+  ];
+  if (state.all.comptes.length > 1) tiles.push(['switch', '👛', 'Changer de compte', 'Voir tous les comptes', 'lilac']);
+  view.innerHTML = `
+    <p class="menu-hello">${hello} !<small>${esc(compteName(state.compte))}</small></p>
+    ${summaryCard}
+    <button type="button" class="primary wide menu-add" id="m-add">＋ Ajouter une dépense ou une rentrée</button>
+    <div class="tiles">${tiles.map(([go, icon, title, text, color]) => `
+      <button type="button" class="tile t-${color}" data-go="${go}">
+        <span class="ico">${icon}</span><b>${esc(title)}</b><span class="d">${esc(text)}</span>
+      </button>`).join('')}</div>
+    ${prefs().help ? '<p class="note" style="text-align:center">Pour revenir ici : touche le logo en haut à gauche, ou 🏠 en bas.</p>' : ''}`;
+  const reminder = $('#sheet').hidden ? payReminder() : null;
+  if (reminder) paySheet(reminder);
+}
+
+// ----------------------------------------------- bouton « retour » du téléphone
+// Un retour ferme la fenêtre ouverte, sinon revient à l'accueil du compte, puis à la liste des comptes.
+let backArmed = false;
+function canGoBack() { return !!state.email && (!$('#sheet').hidden || state.compte !== null); }
+function armBack() {
+  if (backArmed || !canGoBack()) return;
+  try { history.pushState({ kompte: 1 }, ''); backArmed = true; } catch (e) { /* rien */ }
+}
+window.addEventListener('popstate', () => {
+  backArmed = false;
+  if (!$('#sheet').hidden) closeSheet();
+  else if (state.compte !== null && state.tab !== 'menu') { state.tab = 'menu'; window.scrollTo(0, 0); render(); }
+  else if (state.compte !== null) { openCompte(null); render(); }
+  armBack();
+});
 
 function renderHome() {
   const comptes = state.all.comptes;
@@ -1480,6 +1581,7 @@ function renderHome() {
   }).join('');
   view.innerHTML = `
     <h2>Choisis un compte</h2>
+    ${prefs().help ? '<p class="page-help">💡 Touche un compte pour l’ouvrir. Le montant à droite est ce qui reste à dépenser.</p>' : ''}
     <div class="list">${rows}</div>
     <button type="button" class="primary wide" id="add-compte" style="margin-top:14px">+ Nouveau compte</button>
     <p class="note">Renommer ou supprimer un compte se fait sur le PC.</p>`;
@@ -1542,7 +1644,7 @@ function renderDashboard() {
   const { income, out, paid, events } = summary(ym);
   const isToday = ym === currentMonth();
   const today = todayIso();
-  // Seulement ce qui a déjà eu lieu, les 10 plus récentes (le détail est dans Transactions).
+  // Seulement ce qui a déjà eu lieu, les 10 plus récentes (le détail est dans Opérations).
   const done = events.filter((e) => e.due <= today).slice(0, 10);
   const metric = (label, value, color, id = '') =>
     `<${id ? `button type="button" id="${id}"` : 'div'} class="metric"><small>${label}</small><b style="color:${color}">${euro(value)}</b></${id ? 'button' : 'div'}>`;
@@ -1575,7 +1677,7 @@ function renderDashboard() {
     <button type="button" class="notes-btn" id="notes">Notes${state.data.notes.length ? ` (${state.data.notes.length})` : ''}</button>
     <h2>Dernières opérations</h2>
     <div class="list">${done.map(eventRow).join('') || '<p class="empty">Aucune opération passée ce mois-ci.</p>'}</div>
-    ${done.length ? '<p class="note">Toutes les opérations du mois : onglet Transactions.</p>' : ''}`;
+    ${done.length ? '<p class="note">Toutes les opérations du mois : onglet Opérations.</p>' : ''}`;
   const reminder = $('#sheet').hidden ? payReminder() : null;
   if (reminder) paySheet(reminder);
 }
@@ -2197,6 +2299,8 @@ function renderAccount() {
     <h2>Réglages</h2>
     <p class="note" style="margin-top:0">Connecté avec ${esc(state.email)}.<br>
       Les modifications faites ici apparaissent sur le PC en quelques secondes, et inversement.</p>
+    ${phoneSettings()}
+    <h2>Partagé avec le PC</h2>
     <label class="field" for="month-start">Début du mois pour ${esc(compteName(state.compte))}</label>
     <select class="input" id="month-start">
       ${Array.from({ length: 28 }, (_, i) => i + 1).map((d) => `<option value="${d}" ${d === monthStart() ? 'selected' : ''}>Le ${d === 1 ? '1er' : d}</option>`).join('')}
@@ -2227,6 +2331,22 @@ function renderAccount() {
     </div>`;
 }
 
+function phoneSettings() {
+  const p = prefs();
+  const theme = (id, label) => `<button type="button" class="theme-card ${p.theme === id ? 'on' : ''}" data-theme-pick="${id}">
+      <span class="sw sw-${id}"></span>${label}</button>`;
+  return `
+    <h2>Sur ce téléphone</h2>
+    <label class="field">Couleurs</label>
+    <div class="themes">${theme('dark', 'Sombre')}${theme('rose', 'Rose &amp; argent')}</div>
+    <label class="field" for="start-page">À l’ouverture d’un compte</label>
+    <select class="input" id="start-page">
+      <option value="menu" ${p.start === 'menu' ? 'selected' : ''}>Afficher l’accueil (les tuiles)</option>
+      <option value="dashboard" ${p.start === 'dashboard' ? 'selected' : ''}>Aller directement à « Mon mois »</option>
+    </select>
+    <label class="check"><input type="checkbox" id="show-help" ${p.help ? 'checked' : ''}> Afficher les petites aides 💡 en haut des pages</label>`;
+}
+
 function renderLogin(message = '') {
   $('#tabs').hidden = true;
   $('#fab').hidden = true;
@@ -2250,6 +2370,7 @@ function openSheet(html, onSubmit) {
   const form = $('#sheet-form');
   form.innerHTML = html;
   $('#sheet').hidden = false;
+  armBack();
   form.onsubmit = async (event) => {
     event.preventDefault();
     const error = form.querySelector('.error-text');
@@ -2795,6 +2916,22 @@ document.addEventListener('click', async (event) => {
   if (t.closest('[data-close]')) { closeSheet(); return; }
   const tab = t.closest('#tabs button');
   if (tab) { state.tab = tab.dataset.tab; window.scrollTo(0, 0); render(); return; }
+  if (t.closest('#home')) {
+    if (state.compte === null) return;
+    state.tab = 'menu'; window.scrollTo(0, 0); render(); return;
+  }
+  if (t.closest('#m-add')) { transactionSheet(null); return; }
+  const go = t.closest('[data-go]');
+  if (go) {
+    const target = go.dataset.go;
+    if (target === 'sheet:budgets') { state.selected = currentMonth(); budgetsSheet(); return; }
+    if (target === 'sheet:spending') { state.selected = currentMonth(); spendingSheet(true); return; }
+    if (target === 'sheet:notes') { notesSheet(); return; }
+    if (target === 'switch') { openCompte(null); render(); return; }
+    state.tab = target; window.scrollTo(0, 0); render(); return;
+  }
+  const themePick = t.closest('[data-theme-pick]');
+  if (themePick) { setPref('theme', themePick.dataset.themePick); applyTheme(); render(); return; }
   if (t.closest('#fab')) { transactionSheet(null); return; }
   if (t.closest('#sync')) { refresh(true); return; }
   if (t.closest('#switch')) { openCompte(null); render(); return; }
@@ -2802,7 +2939,7 @@ document.addEventListener('click', async (event) => {
   const compte = t.closest('[data-compte]');
   if (compte) {
     openCompte(Number(compte.dataset.compte));
-    state.tab = 'dashboard';
+    state.tab = prefs().start === 'dashboard' ? 'dashboard' : 'menu';
     state.selected = currentMonth();
     state.current = state.selected;
     state.query = '';
@@ -2922,6 +3059,8 @@ document.addEventListener('click', async (event) => {
 // Le début du mois s'applique tout de suite, puis part en ligne.
 document.addEventListener('change', async (event) => {
   if (event.target.id === 'c-file' && event.target.files && event.target.files[0]) { importBankFile(event.target.files[0]); return; }
+  if (event.target.id === 'start-page') { setPref('start', event.target.value); return; }
+  if (event.target.id === 'show-help') { setPref('help', event.target.checked); render(); return; }
   if (['card-enabled', 'card-cutoff', 'card-debit'].includes(event.target.id)) {
     const raw = (state.all.kv.card && typeof state.all.kv.card === 'object') ? state.all.kv.card : {};
     const mine = raw[state.compte] || { enabled: false, cutoff: 19, debit: 31, items: [] };
@@ -3003,6 +3142,7 @@ function startApp(session) {
 }
 
 async function boot() {
+  applyTheme();
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
   const { data } = await sb.auth.getSession();
   if (!data.session) { renderLogin(); return; }
