@@ -373,30 +373,25 @@ function carryOver(balance) {
 
 /** Case « C'est l'arrondi que voilà ! » (accueil et Mon mois) ; rien si l'arrondi n'est pas activé. */
 function roundupCard() {
-  const pocket = roundupPocket();
+  const pocket = roundupCovered(); // seulement ce que l'argent réel couvre (après le coussin)
   if (pocket === null) return '';
   const remind = roundupReminder(pocket);
-  const covered = roundupCovered() || 0;
   return `<button type="button" class="roundup-card ${remind ? 'remind' : ''}" id="roundup">
       <span class="ru-ico">🪙</span>
       <span class="ru-body"><small>${esc(ROUNDUP_NAME)}</small><b>${euro(pocket)}</b>
         <em>${remind ? 'Fin du mois : touche ici pour virer tes arrondis vers l’épargne !'
-          : pocket ? 'Arrondis à l’euro supérieur, mis de côté · touche pour les virer' : 'Chaque dépense sera arrondie à l’euro supérieur'}${
-          covered < pocket ? `<br>Couvert par ton disponible : ${euro(covered)} (seule cette part peut être virée)` : ''}</em></span>
+          : pocket ? 'Arrondis à l’euro supérieur, mis de côté · touche pour les virer' : 'Chaque dépense sera arrondie à l’euro supérieur'}</em></span>
     </button>`;
 }
 /** Vire la poche d'arrondi : une dépense Épargne datée d'aujourd'hui vers le compte épargne choisi (= roundup_dialog). */
 function roundupSheet() {
-  const pocket = roundupPocket() || 0;
   const amount = roundupCovered() || 0;
-  if (pocket <= 0) { toast('Rien à virer pour l’instant : la poche est vide.'); return; }
-  if (amount <= 0) { toast('Ton disponible ne couvre pas tes arrondis pour l’instant : rien à virer.'); return; }
+  if (amount <= 0) { toast('Rien à virer pour l’instant.'); return; }
   if (!state.data.savings_accounts.length) { toast('Crée d’abord un compte épargne (onglet Épargne).'); return; }
   const c = roundupConf();
   openSheet(`
     <h3>Virer mes arrondis</h3>
     <p class="roundup-amount">${euro(amount)}<small>« ${esc(ROUNDUP_NAME)} »</small></p>
-    ${amount < pocket ? `<p class="hint">Plafonné à ton disponible : ${euro(pocket - amount)} restent dans la poche.</p>` : ''}
     <input type="hidden" id="f-amount" value="${esc(amountText(amount))}">
     <label class="field" for="f-account">Compte épargne destinataire</label>
     <select class="input" id="f-account">${accountOptions(c.account)}</select>
@@ -2585,7 +2580,7 @@ function renderAccount() {
     </select>
     <p class="hint">9,80 € → 10 € : les 0,20 € vont dans la poche « ${esc(ROUNDUP_NAME)} ». L’argent reste sur le compte
       mais n’est plus compté dans ce qui reste ; en fin de mois, Kompte propose de le virer vers un compte épargne.${roundupConf()
-      ? `<br>Depuis le ${frDate(roundupConf().since)} · dans la poche aujourd’hui : ${euro(roundupPocket())}` : ''}</p>
+      ? `<br>Depuis le ${frDate(roundupConf().since)} · dans la poche aujourd’hui : ${euro(roundupCovered())}` : ''}</p>
     ${categoriesSection()}
     <label class="field">Historique</label>
     <button type="button" class="secondary wide" id="export-month">Exporter un mois en Excel</button>
