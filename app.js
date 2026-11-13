@@ -351,6 +351,13 @@ function roundupNow() {
   return roundupKept(raw - cushionKept(raw));
 }
 /** Vrai les derniers jours de la période quand la poche n'est pas vide (rappel du virement). */
+/** Part de la poche couverte par l'argent réel (après le coussin) : le plus qu'on peut virer.
+    Toute la poche sans solde saisi ; null si l'arrondi n'est pas activé (= roundup_covered). */
+function roundupCovered() {
+  const pocket = roundupPocket();
+  if (pocket === null || getBalance() === null) return pocket;
+  return roundupNow();
+}
 function roundupReminder(pocket) {
   return !!pocket && todayIso() >= addDays(monthPeriod(currentMonth())[1], -ROUNDUP_REMIND_DAYS);
 }
@@ -369,27 +376,32 @@ function roundupCard() {
   const pocket = roundupPocket();
   if (pocket === null) return '';
   const remind = roundupReminder(pocket);
+  const covered = roundupCovered() || 0;
   return `<button type="button" class="roundup-card ${remind ? 'remind' : ''}" id="roundup">
       <span class="ru-ico">🪙</span>
       <span class="ru-body"><small>${esc(ROUNDUP_NAME)}</small><b>${euro(pocket)}</b>
         <em>${remind ? 'Fin du mois : touche ici pour virer tes arrondis vers l’épargne !'
-          : pocket ? 'Arrondis à l’euro supérieur, mis de côté · touche pour les virer' : 'Chaque dépense sera arrondie à l’euro supérieur'}</em></span>
+          : pocket ? 'Arrondis à l’euro supérieur, mis de côté · touche pour les virer' : 'Chaque dépense sera arrondie à l’euro supérieur'}${
+          covered < pocket ? `<br>Couvert par ton disponible : ${euro(covered)} (seule cette part peut être virée)` : ''}</em></span>
     </button>`;
 }
 /** Vire la poche d'arrondi : une dépense Épargne datée d'aujourd'hui vers le compte épargne choisi (= roundup_dialog). */
 function roundupSheet() {
-  const amount = roundupPocket() || 0;
-  if (amount <= 0) { toast('Rien à virer pour l’instant : la poche est vide.'); return; }
+  const pocket = roundupPocket() || 0;
+  const amount = roundupCovered() || 0;
+  if (pocket <= 0) { toast('Rien à virer pour l’instant : la poche est vide.'); return; }
+  if (amount <= 0) { toast('Ton disponible ne couvre pas tes arrondis pour l’instant : rien à virer.'); return; }
   if (!state.data.savings_accounts.length) { toast('Crée d’abord un compte épargne (onglet Épargne).'); return; }
   const c = roundupConf();
   openSheet(`
     <h3>Virer mes arrondis</h3>
     <p class="roundup-amount">${euro(amount)}<small>« ${esc(ROUNDUP_NAME)} »</small></p>
+    ${amount < pocket ? `<p class="hint">Plafonné à ton disponible : ${euro(pocket - amount)} restent dans la poche.</p>` : ''}
     <input type="hidden" id="f-amount" value="${esc(amountText(amount))}">
     <label class="field" for="f-account">Compte épargne destinataire</label>
     <select class="input" id="f-account">${accountOptions(c.account)}</select>
     ${pocketField(c.pocket)}
-    <p class="hint">Kompte ajoute une dépense Épargne datée d’aujourd’hui et la poche repart de zéro.
+    <p class="hint">Kompte ajoute une dépense Épargne datée d’aujourd’hui, retirée de la poche.
       Pense à faire le même virement dans l’appli de ta banque.</p>
     <p class="error-text"></p>
     <div class="actions">
