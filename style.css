@@ -360,3 +360,12 @@ textarea.input { resize: vertical; font: inherit; font-size: 16px; line-height: 
 :root[data-theme="rose"] .bar { background: #f1e6ee; }
 :root[data-theme="rose"] .check input { accent-color: var(--accent); }
 :root[data-theme="rose"] .toast { box-shadow: 0 6px 18px rgba(120, 40, 90, .15); }
+
+/* Logo des comptes (image choisie, affichée en rond) */
+.logo { width: 40px; height: 40px; border-radius: 50%; object-fit: cover; flex: none; background: var(--card); }
+.logo.big { width: 56px; height: 56px; }
+.logo.empty { display: inline-flex; align-items: center; justify-content: center; color: var(--muted); font-size: 22px; font-weight: 700; }
+.logo-pick { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.btn-file { display: inline-block; cursor: pointer; }
+.menu-head { display: flex; align-items: center; gap: 12px; }
+.menu-head .logo { margin-top: 2px; }

@@ -1523,7 +1523,7 @@ function renderMenu() {
   ];
   if (state.all.comptes.length > 1) tiles.push(['switch', '👛', 'Changer de compte', 'Voir tous les comptes', 'lilac']);
   view.innerHTML = `
-    <p class="menu-hello">${hello} !<small>${esc(compteName(state.compte))}</small></p>
+    <div class="menu-head">${logoImg(state.compte, 'big')}<p class="menu-hello">${hello} !<small>${esc(compteName(state.compte))}</small></p></div>
     ${summaryCard}
     <button type="button" class="primary wide menu-add" id="m-add">＋ Ajouter une dépense ou une rentrée</button>
     <div class="tiles">${tiles.map(([go, icon, title, text, color]) => `
@@ -1576,7 +1576,7 @@ function renderHome() {
     const sub = free ? `<span class="sub">Solde <span class="solde">${euro(balance)}</span></span>`
       : balance === null ? '<span class="sub">Solde non renseigné</span>' : '';
     return `<button type="button" class="row" data-compte="${c.id}">
-        <span class="body"><span class="title">${esc(c.name)}</span>${sub}</span>${value}${cushion}
+        ${logoImg(c.id)}<span class="body"><span class="title">${esc(c.name)}</span>${sub}</span>${value}${cushion}
       </button>`;
   }).join('');
   view.innerHTML = `
@@ -1604,6 +1604,67 @@ function compteSheet() {
     await check(sb.from('comptes').insert({ id: newId(), name }));
   });
   setTimeout(() => $('#sheet-form').querySelector('#c-name').focus(), 120);
+}
+
+// ------------------------------------------------------- logo des comptes
+// Réglage partagé « account_logos » : {compte: 'data:image/jpeg;base64,…'}, carré de 128 px affiché en rond
+// (mêmes règles que logo_data_url() sur le PC).
+const LOGO_SIZE = 128;
+function compteLogo(id) {
+  const raw = state.all && state.all.kv.account_logos;
+  const url = raw && typeof raw === 'object' ? raw[id] : null;
+  return typeof url === 'string' && /^data:image\/(jpeg|png|webp);base64,[A-Za-z0-9+/=]+$/.test(url) ? url : null;
+}
+function logoImg(id, cls = '') {
+  const url = compteLogo(id);
+  return url ? `<img class="logo ${cls}" src="${url}" alt="">` : '';
+}
+/** Image choisie → carré centré de 128 px en JPEG (transparence sur fond blanc). */
+function logoFromFile(file) {
+  return new Promise((resolve, reject) => {
+    const src = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      URL.revokeObjectURL(src);
+      const side = Math.min(img.naturalWidth, img.naturalHeight);
+      if (!side) { reject(new Error('Image vide.')); return; }
+      const canvas = document.createElement('canvas');
+      canvas.width = canvas.height = LOGO_SIZE;
+      const ctx = canvas.getContext('2d');
+      ctx.fillStyle = '#fff';
+      ctx.fillRect(0, 0, LOGO_SIZE, LOGO_SIZE);
+      ctx.imageSmoothingQuality = 'high';
+      ctx.drawImage(img, (img.naturalWidth - side) / 2, (img.naturalHeight - side) / 2, side, side, 0, 0, LOGO_SIZE, LOGO_SIZE);
+      resolve(canvas.toDataURL('image/jpeg', 0.85));
+    };
+    img.onerror = () => { URL.revokeObjectURL(src); reject(new Error('Image illisible.')); };
+    img.src = src;
+  });
+}
+async function saveLogo(compteId, url) {
+  const raw = state.all.kv.account_logos && typeof state.all.kv.account_logos === 'object' ? state.all.kv.account_logos : {};
+  const value = { ...raw };
+  if (url) value[compteId] = url; else delete value[compteId];
+  state.all.kv.account_logos = value;
+  render();
+  try {
+    await check(sb.from('kv_settings').upsert({ key: 'account_logos', value }, { onConflict: 'user_id,key' }));
+    toast(url ? 'Logo enregistré.' : 'Logo retiré.');
+  } catch (e) {
+    toast('Enregistrement impossible : réessaie.');
+    refresh(true);
+  }
+}
+function logoSettings() {
+  const name = compteName(state.compte);
+  const url = compteLogo(state.compte);
+  return `<label class="field">Logo du compte</label>
+    <div class="logo-pick">
+      ${url ? logoImg(state.compte, 'big') : `<span class="logo big empty">${esc((name[0] || '?').toUpperCase())}</span>`}
+      <label class="secondary btn-file">Choisir une image…<input type="file" id="logo-file" accept="image/*" hidden></label>
+      ${url ? '<button type="button" class="secondary" id="logo-remove">Retirer</button>' : ''}
+    </div>
+    <p class="hint">Une image à toi pour reconnaître « ${esc(name)} » : recadrée en carré au centre, affichée en rond ici et sur le PC.</p>`;
 }
 
 function compteName(id) {
@@ -2301,6 +2362,7 @@ function renderAccount() {
       Les modifications faites ici apparaissent sur le PC en quelques secondes, et inversement.</p>
     ${phoneSettings()}
     <h2>Partagé avec le PC</h2>
+    ${logoSettings()}
     <label class="field" for="month-start">Début du mois pour ${esc(compteName(state.compte))}</label>
     <select class="input" id="month-start">
       ${Array.from({ length: 28 }, (_, i) => i + 1).map((d) => `<option value="${d}" ${d === monthStart() ? 'selected' : ''}>Le ${d === 1 ? '1er' : d}</option>`).join('')}
@@ -2992,6 +3054,7 @@ document.addEventListener('click', async (event) => {
   if (t.closest('#add-saving')) { savingSheet(); return; }
   if (t.closest('#add-category')) { categorySheet(); return; }
   if (t.closest('#export-month')) { exportSheet(); return; }
+  if (t.closest('#logo-remove')) { saveLogo(state.compte, null); return; }
   if (t.closest('#c-compare')) { compareBalance(); return; }
   const bankAdd = t.closest('[data-bank-add]');
   if (bankAdd && checkState.ops) {
@@ -3059,6 +3122,11 @@ document.addEventListener('click', async (event) => {
 // Le début du mois s'applique tout de suite, puis part en ligne.
 document.addEventListener('change', async (event) => {
   if (event.target.id === 'c-file' && event.target.files && event.target.files[0]) { importBankFile(event.target.files[0]); return; }
+  if (event.target.id === 'logo-file' && event.target.files && event.target.files[0]) {
+    const compteId = state.compte;
+    try { await saveLogo(compteId, await logoFromFile(event.target.files[0])); } catch (e) { toast(e.message); }
+    return;
+  }
   if (event.target.id === 'start-page') { setPref('start', event.target.value); return; }
   if (event.target.id === 'show-help') { setPref('help', event.target.checked); render(); return; }
   if (['card-enabled', 'card-cutoff', 'card-debit'].includes(event.target.id)) {
