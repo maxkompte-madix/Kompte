@@ -676,6 +676,45 @@ function budgetSpent(ym, all = false) {
   }
   return spent;
 }
+/** Report cumulé du non dépensé avant ce mois, depuis le premier mois du budget (jamais avant BUDGETS_SINCE). */
+function budgetCarry(key, list, ym, spentOf) {
+  let carry = 0;
+  let m = list[0][0] > BUDGETS_SINCE ? list[0][0] : BUDGETS_SINCE;
+  while (m < ym) {
+    const b = budgetAt(list, m);
+    carry = b ? Math.max(0, b + carry - (spentOf(m)[key] || 0)) : 0;
+    m = nextMonth(m);
+  }
+  return carry;
+}
+/** Ce qui restait en début de mois pour les budgets (= budget_room du PC) : report du mois dernier + revenus fixes
+    − dépenses fixes du mois. Les fixes d'une catégorie budgétée (keys) sont déjà dans son budget. */
+function budgetRoom(ym, keys) {
+  const balance = getBalance();
+  const carry = balance !== null && ym === currentMonth() ? carryOver(balance) : 0;
+  let fixedIn = 0, fixedOut = 0;
+  for (const e of summary(ym).events) {
+    if (e.row.id >= 0) continue;
+    if (e.row.kind === 'Revenu') { fixedIn += e.amount; continue; }
+    const sub = subOf(e.row);
+    if (keys.has(e.row.category) || (sub && keys.has(`${e.row.category}|${sub.id}`))) continue;
+    fixedOut += e.amount;
+  }
+  return { carry, fixedIn, fixedOut, room: carry + fixedIn - fixedOut };
+}
+/** Total des budgets du mois (report compris) pour des montants {clé: base} (= budget_total du PC) ;
+    un sous-budget ne compte que si sa catégorie n'a pas de budget. */
+function budgetTotal(ym, values) {
+  const versions = budgetVersions(state.compte);
+  const spentCache = {};
+  const spentOf = (m) => (spentCache[m] = spentCache[m] || budgetSpent(m));
+  let total = 0;
+  for (const [key, base] of Object.entries(values)) {
+    if (base <= 0 || (key.includes('|') && (values[key.split('|')[0]] || 0) > 0)) continue;
+    total += base + (versions[key] ? budgetCarry(key, versions[key], ym, spentOf) : 0);
+  }
+  return total;
+}
 /** [{key, label, base, carry, budget (= base + report), spent}] pour le mois choisi, dans l'ordre des catégories. */
 function budgetRows(ym) {
   const versions = budgetVersions(state.compte);
@@ -687,14 +726,7 @@ function budgetRows(ym) {
     const list = versions[key];
     const base = budgetAt(list, ym);
     if (!base) continue;
-    // Report cumulé depuis le premier mois du budget (jamais avant BUDGETS_SINCE).
-    let carry = 0;
-    let m = list[0][0] > BUDGETS_SINCE ? list[0][0] : BUDGETS_SINCE;
-    while (m < ym) {
-      const b = budgetAt(list, m);
-      carry = b ? Math.max(0, b + carry - (spentOf(m)[key] || 0)) : 0;
-      m = nextMonth(m);
-    }
+    const carry = budgetCarry(key, list, ym, spentOf);
     rows.push({ key, label: budgetLabel(key), base, carry, budget: base + carry, spent: spentOf(ym)[key] || 0 });
   }
   return rows;
@@ -786,11 +818,19 @@ function budgetEditSheet() {
     <p class="hint" style="text-align:center">Un montant par mois pour ${esc(compteName(state.compte))}. Laisse vide : pas de budget.<br>
       Les changements valent à partir de ${monthLabel(now).toLowerCase()} ; les mois passés gardent leurs budgets.</p>
     ${fields}
+    <p class="hint budget-room" id="b-room" style="text-align:center"></p>
     <p class="error-text"></p>
     <div class="actions">
       <button type="button" class="secondary" data-close>Annuler</button>
       <button type="submit" class="primary">Enregistrer</button>
     </div>`, async (form) => {
+    const checked = budgetRoomCheck(form, now);
+    if (!checked) budgetValues(form); // montant illisible : son message d'erreur
+    const { over, room } = checked;
+    if (over > 0) {
+      throw new Error(`Tes budgets dépassent de ${euro(over)} ce qui restait en début de mois (${euro(room.room)} = report du mois dernier `
+        + `${euro(room.carry)} + revenus fixes ${euro(room.fixedIn)} − dépenses fixes ${euro(room.fixedOut)}).`);
+    }
     const mine = budgetVersions(state.compte);
     for (const input of form.querySelectorAll('input[data-budget]')) {
       const key = input.dataset.budget;
@@ -805,6 +845,28 @@ function budgetEditSheet() {
     state.all.kv.budgets = value;
     await check(sb.from('kv_settings').upsert({ key: 'budgets', value }, { onConflict: 'user_id,key' }));
   });
+  const form = $('#sheet-form');
+  form.querySelectorAll('input[data-budget]').forEach((input) => input.addEventListener('input', () => budgetRoomCheck(form, now)));
+  budgetRoomCheck(form, now);
+}
+function budgetValues(form) {
+  return Object.fromEntries([...form.querySelectorAll('input[data-budget]')]
+    .map((input) => [input.dataset.budget, input.value.trim() ? positiveCents(input.value) : 0]));
+}
+/** Plafond des budgets : ce qui restait en début de mois. Met à jour la ligne #b-room ; null si un montant est illisible. */
+function budgetRoomCheck(form, ym) {
+  const line = form.querySelector('#b-room');
+  let values;
+  try { values = budgetValues(form); } catch (e) { return null; }
+  const room = budgetRoom(ym, new Set(Object.keys(values).filter((k) => values[k] > 0)));
+  const total = budgetTotal(ym, values);
+  const over = total - room.room;
+  if (line) {
+    line.innerHTML = `Budgets : <b>${euro(total)}</b> sur ${euro(room.room)} restant en début de mois`
+      + (over > 0 ? `<br>Dépassement de ${euro(over)} : baisse un budget.` : '');
+    line.style.color = `var(${over > 0 ? '--red' : '--muted'})`;
+  }
+  return { over, room };
 }
 
 // ------------------------------------------------ export Excel d'un mois (= export_month du PC)
