@@ -369,3 +369,16 @@ textarea.input { resize: vertical; font: inherit; font-size: 16px; line-height: 
 .btn-file { display: inline-block; cursor: pointer; }
 .menu-head { display: flex; align-items: center; gap: 12px; }
 .menu-head .logo { margin-top: 2px; }
+
+/* Poche d'arrondi « C'est l'arrondi que voilà ! » (accueil et Mon mois) */
+.roundup-card { display: flex; align-items: center; gap: 12px; width: 100%; margin: 10px 0 0; padding: 13px 15px;
+  border: 1px solid var(--border); border-radius: 14px; background: var(--card); color: var(--text); text-align: left; font: inherit; }
+.roundup-card.remind { border: 2px solid var(--orange); }
+.roundup-card .ru-ico { font-size: 26px; line-height: 1; }
+.roundup-card .ru-body { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.roundup-card small { color: var(--muted); font-size: 12px; }
+.roundup-card b { color: var(--turquoise); font-size: 21px; }
+.roundup-card em { color: var(--muted); font-size: 12px; font-style: normal; }
+.roundup-card.remind em { color: var(--orange); font-weight: 600; }
+.roundup-amount { text-align: center; color: var(--turquoise); font-size: 30px; font-weight: 800; margin: 4px 0 8px; }
+.roundup-amount small { display: block; color: var(--muted); font-size: 13px; font-weight: 400; }

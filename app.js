@@ -273,7 +273,8 @@ function rawAvailable(balance) {
 /** Disponible moins le coussin, qui ne le fait jamais passer sous zéro (voir cushionKept). */
 function availableMoney(balance) {
   const [raw, until] = rawAvailable(balance);
-  return [raw - cushionKept(raw), until];
+  const free = raw - cushionKept(raw);
+  return [free - roundupKept(free), until];
 }
 /** Coussin réellement de côté : jamais plus que ce qui reste vraiment (s'il manque de l'argent, le coussin a servi). */
 function cushionKept(raw) { return Math.min(reserveTotal(), Math.max(0, raw)); }
@@ -288,6 +289,72 @@ function cushionMessage(cents) {
     : cents < 10000 ? 'À l’aise Blaise' : 'T’as mis des liasses dedans ?!';
 }
 
+// ------------------------------------------ arrondi à l'euro supérieur (= kompte.py, clé « roundup »)
+// Chaque paiement d'une dépense ponctuelle est arrondi à l'euro supérieur (9,80 € → 0,20 €) ; la différence va dans
+// la poche « C'est l'arrondi que voilà ! », retirée du disponible jusqu'au virement vers un compte épargne.
+const ROUNDUP_NAME = 'C\'est l\'arrondi que voilà !';
+const ROUNDUP_REMIND_DAYS = 3; // virement proposé les 3 derniers jours de la période
+const intOrNull = (v) => (v === null || v === undefined || typeof v === 'boolean' || !Number.isInteger(Number(v)) || v === '' ? null : Number(v));
+/** {compte: {enabled, since, account, pocket, transfers}} nettoyé (= read_roundup). */
+function roundupSettings() {
+  const raw = state.all && state.all.kv.roundup;
+  const out = {};
+  if (!raw || typeof raw !== 'object') return out;
+  for (const [compte, c] of Object.entries(raw)) {
+    if (!c || typeof c !== 'object' || !/^\d{4}-\d{2}-\d{2}$/.test(String(c.since || ''))) continue;
+    out[compte] = { enabled: c.enabled !== false, since: c.since, account: intOrNull(c.account), pocket: intOrNull(c.pocket),
+                    transfers: (Array.isArray(c.transfers) ? c.transfers : []).map(intOrNull).filter((t) => t !== null) };
+  }
+  return out;
+}
+function roundupConf(compteId = state.compte) {
+  const c = roundupSettings()[compteId];
+  return c && c.enabled ? c : null;
+}
+async function saveRoundup(compteId, conf) {
+  const raw = state.all.kv.roundup && typeof state.all.kv.roundup === 'object' ? state.all.kv.roundup : {};
+  const value = { ...raw, [compteId]: conf };
+  state.all.kv.roundup = value;
+  await check(sb.from('kv_settings').upsert({ key: 'roundup', value }, { onConflict: 'user_id,key' }));
+}
+/** Ce qu'il manque pour arriver à l'euro supérieur : 980 → 20, 1000 → 0. */
+function roundupCents(amount) { return ((-amount % 100) + 100) % 100; }
+/** Paiement arrondi : dépense ponctuelle du compte, hors épargne, virements entre comptes et virements d'arrondi. */
+function isRoundupPayment(row, compteId, transfers) {
+  return row.id > 0 && row.kind === 'Dépense' && row.frequency === 'Unique' && row.compte_id === compteId
+    && (row.vers_compte_id === null || row.vers_compte_id === undefined) && !isSavings(row.category, row.kind)
+    && !transfers.has(row.id);
+}
+/** Poche d'arrondi du compte ouvert : arrondis des paiements passés depuis l'activation, moins les virements
+    d'arrondi déjà faits (jamais négative). null si l'arrondi n'est pas activé. */
+function roundupPocket() {
+  const c = roundupConf();
+  if (!c) return null;
+  const today = todayIso();
+  const transfers = new Set(c.transfers);
+  let total = 0;
+  if (c.since <= today) {
+    for (const e of occurrences(c.since, addDays(today, 1))) {
+      if (isRoundupPayment(e.row, state.compte, transfers)) total += roundupCents(e.amount);
+    }
+  }
+  const done = state.all.items.filter((i) => transfers.has(i.id)).reduce((t, i) => t + i.total_cents, 0);
+  return Math.max(0, total - done);
+}
+/** Arrondis mis de côté, retirés du disponible comme le coussin (jamais plus que ce qui reste). */
+function roundupKept(free) { return Math.min(roundupPocket() || 0, Math.max(0, free)); }
+/** Arrondis retirés du disponible du compte ouvert (pour l'explication sous le disponible). */
+function roundupNow() {
+  const balance = getBalance();
+  if (balance === null || !roundupConf()) return 0;
+  const raw = rawAvailable(balance)[0];
+  return roundupKept(raw - cushionKept(raw));
+}
+/** Vrai les derniers jours de la période quand la poche n'est pas vide (rappel du virement). */
+function roundupReminder(pocket) {
+  return !!pocket && todayIso() >= addDays(monthPeriod(currentMonth())[1], -ROUNDUP_REMIND_DAYS);
+}
+
 /** Ce qui restait à la fin du mois dernier : l'argent réel d'aujourd'hui (solde − achats pas encore prélevés)
     moins les opérations du mois en cours déjà passées. */
 function carryOver(balance) {
@@ -295,6 +362,57 @@ function carryOver(balance) {
   let passed = 0;
   for (const e of occurrences(...monthPeriod(currentMonth()))) if (e.due <= today) passed += signed(e);
   return balance + pendingDebits() - passed;
+}
+
+/** Case « C'est l'arrondi que voilà ! » (accueil et Mon mois) ; rien si l'arrondi n'est pas activé. */
+function roundupCard() {
+  const pocket = roundupPocket();
+  if (pocket === null) return '';
+  const remind = roundupReminder(pocket);
+  return `<button type="button" class="roundup-card ${remind ? 'remind' : ''}" id="roundup">
+      <span class="ru-ico">🪙</span>
+      <span class="ru-body"><small>${esc(ROUNDUP_NAME)}</small><b>${euro(pocket)}</b>
+        <em>${remind ? 'Fin du mois : touche ici pour virer tes arrondis vers l’épargne !'
+          : pocket ? 'Arrondis à l’euro supérieur, mis de côté · touche pour les virer' : 'Chaque dépense sera arrondie à l’euro supérieur'}</em></span>
+    </button>`;
+}
+/** Vire la poche d'arrondi : une dépense Épargne datée d'aujourd'hui vers le compte épargne choisi (= roundup_dialog). */
+function roundupSheet() {
+  const amount = roundupPocket() || 0;
+  if (amount <= 0) { toast('Rien à virer pour l’instant : la poche est vide.'); return; }
+  if (!state.data.savings_accounts.length) { toast('Crée d’abord un compte épargne (onglet Épargne).'); return; }
+  const c = roundupConf();
+  openSheet(`
+    <h3>Virer mes arrondis</h3>
+    <p class="roundup-amount">${euro(amount)}<small>« ${esc(ROUNDUP_NAME)} »</small></p>
+    <input type="hidden" id="f-amount" value="${esc(amountText(amount))}">
+    <label class="field" for="f-account">Compte épargne destinataire</label>
+    <select class="input" id="f-account">${accountOptions(c.account)}</select>
+    ${pocketField(c.pocket)}
+    <p class="hint">Kompte ajoute une dépense Épargne datée d’aujourd’hui et la poche repart de zéro.
+      Pense à faire le même virement dans l’appli de ta banque.</p>
+    <p class="error-text"></p>
+    <div class="actions">
+      <button type="button" class="secondary" data-close>Annuler</button>
+      <button type="submit" class="primary">Virer</button>
+    </div>`, async (form) => {
+    const accountId = Number(form.querySelector('#f-account').value) || null;
+    if (accountId === null) throw new Error('Choisis le compte épargne.');
+    const cat = categories().find((x) => x.savings);
+    if (!cat) throw new Error('Aucune catégorie n’est reliée à un compte épargne.');
+    const split = chosenPocket(form, amount);
+    const id = newId();
+    await check(sb.from('items').insert({ id, compte_id: state.compte, title: ROUNDUP_NAME, kind: 'Dépense', category: cat.name,
+                                          total_cents: amount, first_date: todayIso(), installments: 1, frequency: 'Unique',
+                                          vers_compte_id: null, created_at: utcStamp() }));
+    await check(sb.from('savings_transfers').insert({ item_id: id, account_id: accountId }));
+    if (split !== null) await setPocketOf('items', id, split);
+    const keys = split ? Object.keys(split) : [];
+    const now = roundupSettings()[state.compte] || c;
+    await saveRoundup(state.compte, { ...now, account: accountId, pocket: keys.length === 1 ? Number(keys[0]) : null,
+                                      transfers: [...now.transfers, id] });
+  });
+  wirePocket($('#sheet-form'));
 }
 
 // ----------------------------------------------- « File ton salaire ! » (= kompte.py)
@@ -1525,6 +1643,7 @@ function renderMenu() {
   view.innerHTML = `
     <div class="menu-head">${logoImg(state.compte, 'big')}<p class="menu-hello">${hello} !<small>${esc(compteName(state.compte))}</small></p></div>
     ${summaryCard}
+    ${roundupCard()}
     <button type="button" class="primary wide menu-add" id="m-add">＋ Ajouter une dépense ou une rentrée</button>
     <div class="tiles">${tiles.map(([go, icon, title, text, color]) => `
       <button type="button" class="tile t-${color}" data-go="${go}">
@@ -1718,7 +1837,7 @@ function renderDashboard() {
         `<span class="pending">À prélever le ${frDate(d)} : ${euro(-v)}</span>`).join('') : ''}
       ${free ? `<span class="free">Disponible jusqu’au ${+free[1].slice(8, 10)} ${MONTHS[+free[1].slice(5, 7) - 1]}
         <b style="color:var(${free[0] >= 0 ? '--green' : '--red'})">${euro(free[0])}</b>
-        <em>solde − achats pas encore prélevés − dépenses prévues d’ici là${cushionNow() ? ` − coussin mis de côté (${euro(cushionNow())})` : ''}</em></span>` : ''}
+        <em>solde − achats pas encore prélevés − dépenses prévues d’ici là${cushionNow() ? ` − coussin mis de côté (${euro(cushionNow())})` : ''}${roundupNow() ? ` − arrondis mis de côté (${euro(roundupNow())})` : ''}</em></span>` : ''}
     </button>
     <div class="monthbar">
       <button type="button" class="icon-btn" data-month="-1" aria-label="Mois précédent">‹</button>
@@ -1735,6 +1854,7 @@ function renderDashboard() {
         ${carry === null ? '' : `<span class="carry" style="color:var(${carry >= 0 ? '--green' : '--red'})">Report du mois dernier : ${carry > 0 ? '+' : ''}${euro(carry)}</span>`}</button>
       ${budgetTile(ym)}
     </div>
+    ${isToday ? roundupCard() : ''}
     <button type="button" class="notes-btn" id="notes">Notes${state.data.notes.length ? ` (${state.data.notes.length})` : ''}</button>
     <h2>Dernières opérations</h2>
     <div class="list">${done.map(eventRow).join('') || '<p class="empty">Aucune opération passée ce mois-ci.</p>'}</div>
@@ -2384,6 +2504,14 @@ function renderAccount() {
       <p class="hint">Relevé en cours : achats du ${frDate(addDays(monthShift(cardCycleEnd(card, todayIso()), -1), 1))}
         au ${frDate(cardCycleEnd(card, todayIso()))}, prélevés le ${frDate(cardDebit(card, cardCycleEnd(card, todayIso())))}.
         Coche « Payé par carte » sur chaque achat.</p>` : ''}
+    <label class="field" for="roundup-enabled">Arrondi à l’euro supérieur</label>
+    <select class="input" id="roundup-enabled">
+      <option value="0" ${roundupConf() ? '' : 'selected'}>Pas d’arrondi</option>
+      <option value="1" ${roundupConf() ? 'selected' : ''}>Oui, arrondir mes dépenses</option>
+    </select>
+    <p class="hint">9,80 € → 10 € : les 0,20 € vont dans la poche « ${esc(ROUNDUP_NAME)} ». L’argent reste sur le compte
+      mais n’est plus compté dans ce qui reste ; en fin de mois, Kompte propose de le virer vers un compte épargne.${roundupConf()
+      ? `<br>Depuis le ${frDate(roundupConf().since)} · dans la poche aujourd’hui : ${euro(roundupPocket())}` : ''}</p>
     ${categoriesSection()}
     <label class="field">Historique</label>
     <button type="button" class="secondary wide" id="export-month">Exporter un mois en Excel</button>
@@ -2983,6 +3111,7 @@ document.addEventListener('click', async (event) => {
     state.tab = 'menu'; window.scrollTo(0, 0); render(); return;
   }
   if (t.closest('#m-add')) { transactionSheet(null); return; }
+  if (t.closest('#roundup')) { roundupSheet(); return; }
   const go = t.closest('[data-go]');
   if (go) {
     const target = go.dataset.go;
@@ -3143,6 +3272,20 @@ document.addEventListener('change', async (event) => {
       toast('Enregistrement impossible : réessaie.');
       refresh(true);
     }
+    return;
+  }
+  if (event.target.id === 'roundup-enabled') {
+    const now = roundupSettings()[state.compte];
+    const conf = { ...(now || { since: monthPeriod(currentMonth())[0], account: null, pocket: null, transfers: [] }),
+                   enabled: event.target.value === '1' };
+    const before = state.all.kv.roundup;
+    try {
+      await saveRoundup(state.compte, conf);
+    } catch (e) {
+      state.all.kv.roundup = before;
+      toast('Enregistrement impossible : réessaie.');
+    }
+    render();
     return;
   }
   if (event.target.id !== 'month-start') return;
