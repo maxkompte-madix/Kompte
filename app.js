@@ -3734,7 +3734,7 @@ function transactionSheet(item, preset = null) {
     ${editing && item.frequency !== 'Unique' ? `<p class="hint">Répétition : ${esc(item.frequency)}</p>` : ''}
     <p class="error-text"></p>
     <div class="actions">
-      ${editing ? '<button type="button" class="secondary danger" id="f-delete">Supprimer</button>' : ''}
+      ${editing ? '<button type="button" class="secondary danger hold" id="f-delete" title="Appui long pour supprimer">Supprimer</button>' : ''}
       <button type="button" class="secondary" data-close>Annuler</button>
       <button type="submit" class="primary">Enregistrer</button>
     </div>`;
@@ -3789,8 +3789,8 @@ function transactionSheet(item, preset = null) {
   wirePickers(form, split);
   const del = form.querySelector('#f-delete');
   if (del) {
-    del.addEventListener('click', async () => {
-      if (!confirm('Supprimer cette transaction et toutes ses échéances ?')) return;
+    // Appui long obligatoire (évite de supprimer par erreur) : l'appui long remplace la confirmation.
+    holdButton(del, 'Appuie longuement sur « Supprimer » pour supprimer.', async () => {
       try {
         await check(sb.from('items').delete().eq('id', item.id));
         await setPocketOf('items', item.id, null);
@@ -3877,6 +3877,36 @@ function toast(text) {
 }
 
 // ------------------------------------------------------------- événements
+/** Bouton à appui long (0,8 s) : la barre se remplit, un doigt qui glisse ou lâche trop tôt annule ;
+ *  un simple toucher affiche `hint`. */
+function holdButton(btn, hint, action) {
+  const hold = { timer: null, x: 0, y: 0, done: false };
+  const stop = () => { clearTimeout(hold.timer); hold.timer = null; btn.classList.remove('holding'); };
+  btn.addEventListener('pointerdown', (event) => {
+    stop();
+    hold.done = false;
+    hold.x = event.clientX;
+    hold.y = event.clientY;
+    btn.classList.add('holding');
+    hold.timer = setTimeout(() => {
+      stop();
+      hold.done = true;
+      if (navigator.vibrate) navigator.vibrate(30);
+      action();
+    }, 800);
+  });
+  btn.addEventListener('pointermove', (event) => {
+    if (hold.timer && Math.hypot(event.clientX - hold.x, event.clientY - hold.y) > 10) stop();
+  });
+  for (const name of ['pointerup', 'pointercancel', 'pointerleave']) btn.addEventListener(name, () => { if (hold.timer) stop(); });
+  btn.addEventListener('contextmenu', (event) => event.preventDefault());
+  btn.addEventListener('click', (event) => {
+    event.preventDefault();
+    if (hold.done) { hold.done = false; return; }
+    toast(hint);
+  });
+}
+
 /** Appui long (0,6 s) sur la case « Solde actuel » pour modifier le solde ; un doigt qui glisse annule. */
 const balanceHold = { timer: null, x: 0, y: 0, opened: false };
 function stopBalanceHold() {

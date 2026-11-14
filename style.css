@@ -158,6 +158,10 @@ select.input { color: var(--text); }
 .primary { flex: 1; border: 0; border-radius: 12px; padding: 14px; background: var(--accent); color: #fff; font-weight: 700; font-size: 16px; }
 .secondary { border: 0; border-radius: 12px; padding: 14px 16px; background: var(--card); color: var(--text); }
 .danger { color: var(--red); }
+/* Bouton à appui long (ex. Supprimer une transaction) : une barre se remplit en 0,8 s. */
+.hold { position: relative; overflow: hidden; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; touch-action: manipulation; }
+.hold::after { content: ''; position: absolute; left: 0; bottom: 0; height: 4px; width: 0; background: var(--red); }
+.hold.holding::after { width: 100%; transition: width .8s linear; }
 .error-text { color: var(--red); font-size: 13px; min-height: 18px; margin-top: 10px; }
 .hint { color: var(--muted); font-size: 12px; margin-top: 6px; }
 
