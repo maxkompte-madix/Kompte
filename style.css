@@ -694,3 +694,11 @@ textarea.input { resize: vertical; font: inherit; font-size: 16px; line-height: 
 .cash-ico { width: 34px; height: 34px; flex: none; display: grid; place-items: center; font-size: 20px; border-radius: 10px; background: var(--input); }
 .sub-line { display: flex; gap: 8px; align-items: center; margin-bottom: 6px; }
 .sub-line .input { flex: 1; margin: 0; }
+.link-list { max-height: 50vh; overflow-y: auto; margin: 6px 0; }
+.link-line { display: flex; align-items: center; gap: 10px; padding: 9px 4px; border-bottom: 1px solid var(--line); }
+.link-line input { width: 20px; height: 20px; accent-color: var(--accent); flex: none; }
+.link-line .body { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.link-line .title { font-size: 14px; }
+.link-line .title em { font-style: normal; font-size: 11px; color: var(--orange); }
+.link-line .sub { font-size: 12px; color: var(--muted); }
+.link-line .amount { font-size: 14px; white-space: nowrap; }
