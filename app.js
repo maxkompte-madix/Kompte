@@ -103,6 +103,62 @@ const SVG = {
   holly: `<svg viewBox="0 0 60 36"><path d="M30 18C22 6 10 4 2 8c4 2 4 6 2 9 5-1 7 2 7 6 4-3 8-2 10 1 1-3 4-5 9-6z" fill="#1f8a4c"/>
     <path d="M30 18c8-12 20-14 28-10-4 2-4 6-2 9-5-1-7 2-7 6-4-3-8-2-10 1-1-3-4-5-9-6z" fill="#27a35b"/>
     <circle cx="26" cy="20" r="4" fill="#e23b3b"/><circle cx="34" cy="20" r="4" fill="#e23b3b"/><circle cx="30" cy="25" r="4" fill="#c42828"/></svg>`,
+
+  // Bleu océan
+  fish: `<svg viewBox="0 0 60 34"><path d="M44 17l15-12v24z" fill="#ff8a1e"/><ellipse cx="26" cy="17" rx="22" ry="13" fill="#ff8a1e"/>
+    <path d="M14 6q4 11 0 22M28 4q4 13 0 26" stroke="#fff" stroke-width="4" fill="none"/>
+    <path d="M14 6q4 11 0 22M28 4q4 13 0 26" stroke="#1b1b1b" stroke-width="1" fill="none" opacity=".5"/>
+    <circle cx="9" cy="14" r="2.6" fill="#fff"/><circle cx="8.6" cy="14" r="1.4" fill="#111"/></svg>`,
+  bluefish: `<svg viewBox="0 0 60 34"><path d="M44 17l15-11v22z" fill="#ffd23f"/><ellipse cx="26" cy="17" rx="22" ry="12" fill="#2f6fe0"/>
+    <path d="M10 17q14-9 30 0q-16 6-30 0z" fill="#16357a"/><circle cx="9" cy="14" r="2.4" fill="#fff"/><circle cx="8.6" cy="14" r="1.2" fill="#111"/></svg>`,
+  jelly: `<svg viewBox="0 0 40 70"><path d="M4 22a16 16 0 0 1 32 0q-4 4-8 0-4 4-8 0-4 4-8 0-4 4-8 0z" fill="#ff8fd8" opacity=".85"/>
+    <g stroke="#ffb8ea" stroke-width="2" fill="none" stroke-linecap="round" opacity=".8">
+    <path d="M10 24q-4 10 0 20t0 20"/><path d="M17 25q4 10 0 20t0 18"/><path d="M24 25q-4 10 0 20t0 18"/><path d="M31 24q4 10 0 20t0 20"/></g>
+    <circle cx="15" cy="14" r="1.6" fill="#5a1d4d"/><circle cx="25" cy="14" r="1.6" fill="#5a1d4d"/><path d="M17 18q3 2 6 0" stroke="#5a1d4d" fill="none"/></svg>`,
+  turtle: `<svg viewBox="0 0 70 44"><ellipse cx="58" cy="22" rx="9" ry="7" fill="#7cc76b"/><circle cx="61" cy="20" r="1.5" fill="#123"/>
+    <ellipse cx="20" cy="8" rx="9" ry="4" fill="#7cc76b" transform="rotate(-25 20 8)"/><ellipse cx="20" cy="36" rx="9" ry="4" fill="#7cc76b" transform="rotate(25 20 36)"/>
+    <ellipse cx="44" cy="8" rx="7" ry="3.5" fill="#7cc76b" transform="rotate(30 44 8)"/><ellipse cx="44" cy="36" rx="7" ry="3.5" fill="#7cc76b" transform="rotate(-30 44 36)"/>
+    <ellipse cx="32" cy="22" rx="20" ry="15" fill="#3f8a3a"/><path d="M32 9v26M14 22h36M22 12l20 20M42 12L22 32" stroke="#2c6328" stroke-width="2"/></svg>`,
+  whale: `<svg viewBox="0 0 80 50"><path d="M30 4q-3-4-6 0M30 4q3-4 6 0M30 4v6" stroke="#9fe4ff" stroke-width="2" fill="none" stroke-linecap="round"/>
+    <path d="M6 30q0-18 28-18 22 0 30 14l12-10-3 14 3 12-12-8Q56 46 32 46 6 46 6 30z" fill="#3b8ad9"/>
+    <path d="M10 34q22 12 50-2-6 14-26 14Q14 46 10 34z" fill="#cfeaff"/><circle cx="20" cy="26" r="2.2" fill="#0b2440"/><path d="M14 32q4 3 9 1" stroke="#0b2440" fill="none"/></svg>`,
+  octopus: `<svg viewBox="0 0 60 60"><g fill="#a35cff"><path d="M14 30q-10 10-6 22 4-2 6-10 2 10 8 14 2-8 2-16z"/><path d="M46 30q10 10 6 22-4-2-6-10-2 10-8 14-2-8-2-16z"/>
+    <path d="M24 34q-2 14 4 22 4-10 2-22z"/><path d="M36 34q2 14-4 22-4-10-2-22z"/><circle cx="30" cy="22" r="18"/></g>
+    <circle cx="23" cy="22" r="4" fill="#fff"/><circle cx="37" cy="22" r="4" fill="#fff"/><circle cx="24" cy="23" r="2" fill="#222"/><circle cx="38" cy="23" r="2" fill="#222"/>
+    <path d="M25 31q5 4 10 0" stroke="#4b1f80" stroke-width="2" fill="none"/></svg>`,
+  // Vert tropical
+  parrot: `<svg viewBox="0 0 70 50"><path d="M30 22L6 40l8-2-6 8 14-8z" fill="#2f6fe0"/><path d="M34 24L16 46l14-8z" fill="#ffd23f"/>
+    <ellipse cx="40" cy="24" rx="16" ry="11" fill="#e8322f"/><circle cx="54" cy="16" r="9" fill="#e8322f"/>
+    <path d="M61 13q8 2 5 10-3-3-6-3z" fill="#f2c94c"/><circle cx="56" cy="13" r="3" fill="#fff"/><circle cx="56.5" cy="13" r="1.5" fill="#111"/>
+    <path d="M36 18q10-14 22-8-8 4-14 14z" fill="#28a745"/></svg>`,
+  toucan: `<svg viewBox="0 0 70 60"><path d="M20 44l-6 14 10-8z" fill="#1d1d1d"/><ellipse cx="24" cy="32" rx="14" ry="18" fill="#1d1d1d"/>
+    <ellipse cx="28" cy="22" rx="8" ry="9" fill="#fff4c2"/><circle cx="30" cy="16" r="3" fill="#3fa9f5"/><circle cx="30" cy="16" r="1.4" fill="#111"/>
+    <path d="M34 12q30-4 34 8-14 4-34 4z" fill="#ff8a1e"/><path d="M34 18q20 0 34 2-14 4-34 4z" fill="#e8322f"/><path d="M62 15q5 2 6 5" stroke="#111" fill="none"/>
+    <path d="M22 50h10" stroke="#5aa02c" stroke-width="3"/></svg>`,
+  monkey: `<svg viewBox="0 0 50 90"><path d="M25 0v30" stroke="#5a8f2b" stroke-width="3"/><path d="M25 2q6 6 0 12q-6 6 0 12" stroke="#7cc76b" stroke-width="1.5" fill="none"/>
+    <path d="M25 30q-6 0-6 8" stroke="#8a5a32" stroke-width="5" fill="none" stroke-linecap="round"/>
+    <circle cx="9" cy="48" r="6" fill="#8a5a32"/><circle cx="41" cy="48" r="6" fill="#8a5a32"/><circle cx="9" cy="48" r="3" fill="#e8c39e"/><circle cx="41" cy="48" r="3" fill="#e8c39e"/>
+    <circle cx="25" cy="48" r="15" fill="#8a5a32"/><ellipse cx="25" cy="52" rx="10" ry="9" fill="#e8c39e"/><circle cx="20" cy="45" r="2.2" fill="#222"/><circle cx="30" cy="45" r="2.2" fill="#222"/>
+    <path d="M20 55q5 4 10 0" stroke="#5a3a1e" stroke-width="1.8" fill="none"/><ellipse cx="25" cy="76" rx="10" ry="12" fill="#8a5a32"/>
+    <path d="M33 82q12 2 8-10" stroke="#8a5a32" stroke-width="3" fill="none" stroke-linecap="round"/></svg>`,
+  butterfly: `<svg viewBox="0 0 40 30"><g class="wing"><path d="M20 15C12 0 0 2 4 12c-4 8 8 12 16 3z" fill="#ff5fa2"/><path d="M20 15C28 0 40 2 36 12c4 8-8 12-16 3z" fill="#ffb02e"/></g>
+    <ellipse cx="20" cy="16" rx="1.6" ry="8" fill="#3a2a1a"/><path d="M19 8q-3-5-6-5M21 8q3-5 6-5" stroke="#3a2a1a" fill="none"/></svg>`,
+  palm: `<svg viewBox="0 0 60 80"><path d="M30 78q-4-30 2-52" stroke="#9a6b3c" stroke-width="5" fill="none"/>
+    <g fill="#1f9e57"><path d="M32 26Q14 10 2 22q14-4 30 4z"/><path d="M32 26Q48 8 58 20q-14-2-26 6z"/><path d="M32 26Q20 32 10 48q4-14 22-22z"/>
+    <path d="M32 26Q46 32 52 46q-8-12-20-20z"/><path d="M32 26Q30 8 40 2q-8 10-8 24z"/></g>
+    <circle cx="29" cy="29" r="3" fill="#7a4a24"/><circle cx="34" cy="30" r="3" fill="#7a4a24"/></svg>`,
+  // Cyberpunk (néons, éclairs, hologrammes : dessins maison, aucun élément d'un jeu existant)
+  bolt: `<svg viewBox="0 0 40 90"><path d="M24 0L8 40h12L6 90l28-54H20L32 0z" fill="#f5ff3b" stroke="#fff" stroke-width="1.5"/></svg>`,
+  boltc: `<svg viewBox="0 0 40 90"><path d="M24 0L8 40h12L6 90l28-54H20L32 0z" fill="#00f0ff" stroke="#fff" stroke-width="1.5"/></svg>`,
+  globe: `<svg viewBox="0 0 60 60"><g fill="none" stroke="#00f0ff" stroke-width="1.4"><circle cx="30" cy="30" r="24"/>
+    <ellipse cx="30" cy="30" rx="10" ry="24"/><ellipse cx="30" cy="30" rx="18" ry="24"/><path d="M6 30h48M10 18h40M10 42h40"/></g>
+    <path d="M14 56h32" stroke="#ff2bd6" stroke-width="2"/><path d="M18 56l12-6 12 6" fill="rgba(255,43,214,.25)" stroke="#ff2bd6"/></svg>`,
+  holocat: `<svg viewBox="0 0 50 50"><g fill="none" stroke="#ff2bd6" stroke-width="1.6" stroke-linejoin="round">
+    <path d="M10 22L12 6l9 9h8l9-9 2 16q2 16-15 18Q8 38 10 22z"/><path d="M18 24l3 2M29 26l3-2"/><path d="M23 30l2 2 2-2"/>
+    <path d="M6 28h8M6 32h8M36 28h8M36 32h8"/></g><path d="M8 46h34" stroke="#00f0ff" stroke-width="2"/></svg>`,
+  drone: `<svg viewBox="0 0 60 40"><path d="M6 8h18M36 8h18" stroke="#00f0ff" stroke-width="2"/><path d="M15 8v6M45 8v6" stroke="#9a96c4" stroke-width="2"/>
+    <rect x="12" y="14" width="36" height="12" rx="6" fill="#1d1940" stroke="#ff2bd6" stroke-width="1.5"/><circle cx="30" cy="20" r="3.5" fill="#ff2bd6"/>
+    <path d="M24 26l-6 12h24l-6-12" fill="rgba(0,240,255,.18)"/></svg>`,
 };
 const DECO = {
   halloween: () => `
@@ -115,11 +171,28 @@ const DECO = {
       + `animation-duration:${9 + (i % 5) * 2}s;font-size:${10 + (i % 4) * 4}px">❄</i>`).join('')}
     <span class="d-holly">${SVG.holly}</span>
     <span class="d-snowman">${SVG.snowman}</span>`,
+  ocean: () => `
+    ${Array.from({ length: 14 }, (_, i) => `<i class="bubble" style="left:${(i * 29 + 5) % 100}%;animation-delay:-${(i * 1.9) % 11}s;`
+      + `animation-duration:${8 + (i % 4) * 2}s;width:${5 + (i % 3) * 4}px;height:${5 + (i % 3) * 4}px"></i>`).join('')}
+    <span class="d-swim f1">${SVG.fish}</span><span class="d-swim f2 back">${SVG.bluefish}</span>
+    <span class="d-swim f3">${SVG.turtle}</span>
+    <span class="d-jelly">${SVG.jelly}</span>`,
+  tropical: () => `
+    <span class="d-monkey">${SVG.monkey}</span>
+    <span class="d-flyby p1">${SVG.parrot}</span>
+    <span class="d-butterfly b1">${SVG.butterfly}</span><span class="d-butterfly b2">${SVG.butterfly}</span><span class="d-butterfly b3">${SVG.butterfly}</span>`,
+  cyber: () => `
+    <i class="scan"></i>
+    <span class="d-bolt z1">${SVG.bolt}</span><span class="d-bolt z2">${SVG.boltc}</span><span class="d-bolt z3">${SVG.bolt}</span>
+    <span class="d-drone">${SVG.drone}</span>`,
 };
 /** Petite scène dessinée à droite du « Bonjour » de l'accueil (dans la page : ne cache jamais rien). */
 const SCENE = {
   halloween: () => `<span class="scene"><span class="s-big wobble">${SVG.pumpkin}</span><span class="s-small float">${SVG.ghost}</span></span>`,
   noel: () => `<span class="scene"><span class="s-big">${SVG.tree}</span><span class="s-small wobble">${SVG.gift}</span></span>`,
+  ocean: () => `<span class="scene"><span class="s-big float">${SVG.whale}</span><span class="s-small wobble">${SVG.octopus}</span></span>`,
+  tropical: () => `<span class="scene"><span class="s-big">${SVG.palm}</span><span class="s-small wobble">${SVG.toucan}</span></span>`,
+  cyber: () => `<span class="scene"><span class="s-big holo spin">${SVG.globe}</span><span class="s-small holo">${SVG.holocat}</span></span>`,
 };
 /** Petites blagues de l'accueil, selon le thème (une au hasard à chaque affichage). */
 const JOKES = {
