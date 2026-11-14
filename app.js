@@ -2122,8 +2122,8 @@ function renderMenu() {
 // Un retrait = une dépense de catégorie « Retrait » (comptée normalement dans le mois, PC compris).
 // Les dépenses en espèces ne sont PAS des transactions : elles ne comptent pas une 2e fois dans le mois.
 // cash = { [compteId]: { start: 'AAAA-MM-JJ', subs: [{id, name}], ops: [{id, date, cents, kind: 'spend'|'adjust', sub, note}],
-//                        links: [id] } } : opérations liées comme retraits sans changer leur catégorie
-//                        (id > 0 : transaction, comptée même avant « start » ; id < 0 : montant fixe, chaque mois depuis « start »).
+//                        links: [id] } } : anciens retraits (catégorie « Retrait », datés d'avant « start ») à compter quand même.
+// Seules les opérations de catégorie « Retrait » comptent : un lien vers une autre catégorie est ignoré.
 const CASH_SUBS = [{ id: 'boulangerie', name: 'Boulangerie' }, { id: 'marche', name: 'Marché' }, { id: 'cafe', name: 'Café & resto' },
                    { id: 'pourboires', name: 'Pourboires' }, { id: 'divers', name: 'Divers' }];
 const isRetrait = (name) => /^retraits?$/.test(String(name).normalize('NFD').replace(/[̀-ͯ]/g, '').trim().toLowerCase());
@@ -2148,8 +2148,8 @@ function cashRetraits(start, links = []) {
   const linked = new Set(links);
   let from = start;
   for (const r of state.data.items) if (linked.has(r.id) && r.first_date < from) from = r.first_date;
-  return occurrences(from, end).filter((e) => e.row.kind !== 'Revenu' && !e.row.received
-    && ((isRetrait(e.row.category) && e.due >= start) || (linked.has(e.row.id) && (e.row.id > 0 || e.due >= start))));
+  return occurrences(from, end).filter((e) => e.row.kind !== 'Revenu' && !e.row.received && isRetrait(e.row.category)
+    && (e.due >= start || (e.row.id > 0 && linked.has(e.row.id))));
 }
 function cashState() {
   const c = cashData();
@@ -2174,7 +2174,7 @@ function renderCash() {
       <div class="cash-split"><span>${esc(cashSubName(c, id))}</span><span class="bar"><i style="width:${monthSpent ? Math.round(cents * 100 / monthSpent) : 0}%"></i></span><b>${euro(cents)}</b></div>`).join('');
   const history = [
     ...retraits.map((e) => ({ date: e.due, html: `<button type="button" class="row" data-item="${e.row.id}" data-due="${e.due}">
-        ${catIcon(e.row.category)}<span class="body"><span class="title">${esc(e.row.title)}</span><span class="sub">${isRetrait(e.row.category) ? 'Retrait' : 'Retrait lié'}${e.row.id < 0 ? ' fixe' : ''} · ${frDate(e.due)}</span></span>
+        ${catIcon(e.row.category)}<span class="body"><span class="title">${esc(e.row.title)}</span><span class="sub">Retrait${e.row.id < 0 ? ' fixe' : e.due < start ? ' ancien' : ''} · ${frDate(e.due)}</span></span>
         <span class="amount plus">+${euro(e.amount)}</span></button>` })),
     ...ops.map((o) => ({ date: o.date, html: `<button type="button" class="row" data-cash-op="${esc(o.id)}">
         <span class="cash-ico">${o.kind === 'adjust' ? '🔄' : '💶'}</span>
@@ -2182,20 +2182,21 @@ function renderCash() {
         <span class="sub">${o.kind === 'adjust' ? 'Correction' : esc(cashSubName(c, o.sub))} · ${frDate(o.date)}</span></span>
         <span class="amount ${o.kind === 'adjust' ? (o.cents >= 0 ? 'plus' : 'minus') : 'minus'}">${o.kind === 'adjust' ? (o.cents >= 0 ? '+' : '−') : '−'}${euro(Math.abs(o.cents))}</span></button>` })),
   ].sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0)).slice(0, 80).map((h) => h.html).join('');
-  const noCat = !retraitCategory() && !c.links.length;
+  const noCat = !retraitCategory();
+  const oldCount = retraits.filter((e) => e.due < start).length;
   view.innerHTML = `
     <h2>Espèces</h2>
     <div class="hero cash-hero"><small>DANS TON PORTE-MONNAIE</small>
       <strong style="${inWallet < 0 ? 'color:var(--red)' : ''}">${euro(inWallet)}</strong>
       <span>Suivi depuis le ${frDate(start)}${c.start ? '' : ' (aujourd’hui)'}</span></div>
-    ${noCat ? `<div class="cash-warn">Pour suivre tes retraits : crée une catégorie « Retrait », ou lie tes retraits existants (bouton 🔗 plus bas).
+    ${noCat ? `<div class="cash-warn">Pour suivre tes retraits, il faut une catégorie « Retrait » (pense à y mettre aussi ton retrait fixe du mois).
       <button type="button" class="primary wide" id="c-make-cat">Créer la catégorie « Retrait »</button></div>` : ''}
     <button type="button" class="primary wide" id="c-spend">＋ Dépense en espèces</button>
     <div class="cash-btns">
       <button type="button" class="secondary" id="c-retrait">🏧 Ajouter un retrait</button>
       <button type="button" class="secondary" id="c-recount">🔄 Recompter</button>
     </div>
-    <button type="button" class="secondary wide" id="c-link" style="margin-bottom:12px">🔗 Lier des retraits passés ou fixes${c.links.length ? ` (${c.links.length})` : ''}</button>
+    <button type="button" class="secondary wide" id="c-link" style="margin-bottom:12px">🔗 Ajouter d’anciens retraits${oldCount ? ` (${oldCount})` : ''}</button>
     <div class="metrics">
       <div class="metric"><small>Retiré ce mois-ci</small><b style="color:var(--green)">${euro(monthOut)}</b></div>
       <div class="metric"><small>Dépensé en espèces</small><b style="color:var(--red)">${euro(monthSpent)}</b></div>
@@ -2323,53 +2324,33 @@ function cashSubsSheet() {
   });
 }
 
-/** Lier comme retraits des dépenses passées ou des montants fixes, sans changer leur catégorie. */
+/** Anciens retraits : dépenses de catégorie « Retrait » datées d'avant le début du suivi, à compter quand même. */
 function cashLinkSheet() {
   const c = cashData();
-  const today = todayIso(), end = addDays(today, 1);
+  const { start } = cashState();
   const linked = new Set(c.links);
-  const hint = /retrait|dab|distrib|atm|esp[eè]ce|cash|liquide/i;
-  const cands = new Map();
-  // Montants fixes encore actifs ces 3 derniers mois, puis dépenses ponctuelles des 6 derniers mois.
-  for (const e of fixedEvents(addDays(today, -92), end)) {
-    if (e.row.kind === 'Revenu' || e.row.received || isRetrait(e.row.category) || cands.has(e.row.id)) continue;
-    const v = state.data.fixed_versions.filter((x) => x.group_id === -e.row.id).sort((a, b) => (a.start_month < b.start_month ? 1 : -1))[0];
-    cands.set(e.row.id, { id: e.row.id, title: e.row.title, amount: e.amount, date: e.due,
-                          sub: `Montant fixe · ${v ? `le ${v.day_of_month} du mois` : 'chaque mois'} · ${e.row.category}` });
-  }
-  for (const e of occurrences(addDays(today, -183), end)) {
-    if (e.row.id < 0 || e.row.kind === 'Revenu' || isRetrait(e.row.category) || cands.has(e.row.id)) continue;
-    cands.set(e.row.id, { id: e.row.id, title: e.row.title, amount: e.row.total_cents, date: e.row.first_date,
-                          sub: `${frDate(e.row.first_date)} · ${e.row.category}` });
-  }
-  // Déjà liées mais plus anciennes que 6 mois : on les garde dans la liste pour pouvoir les délier.
-  for (const r of state.data.items) if (linked.has(r.id) && !cands.has(r.id)) {
-    cands.set(r.id, { id: r.id, title: r.title, amount: r.total_cents, date: r.first_date, sub: `${frDate(r.first_date)} · ${r.category}` });
-  }
-  const score = (x) => (linked.has(x.id) ? 0 : hint.test(x.title) ? 1 : x.id < 0 ? 2 : 3);
-  const list = [...cands.values()].sort((a, b) => score(a) - score(b) || (a.date < b.date ? 1 : a.date > b.date ? -1 : 0)).slice(0, 80);
-  const rows = list.map((x) => `<label class="link-line">
-      <input type="checkbox" data-link="${x.id}" ${linked.has(x.id) ? 'checked' : ''}>
-      <span class="body"><span class="title">${esc(x.title)}${hint.test(x.title) && !linked.has(x.id) ? ' <em>retrait ?</em>' : ''}</span>
-        <span class="sub">${esc(x.sub)}</span></span>
-      <span class="amount minus">−${euro(x.amount)}</span></label>`).join('');
+  const list = state.data.items.filter((r) => r.kind !== 'Revenu' && isRetrait(r.category) && r.first_date < start)
+    .sort((a, b) => (a.first_date < b.first_date ? 1 : a.first_date > b.first_date ? -1 : b.id - a.id)).slice(0, 80);
+  const fixed = [...new Map(fixedEvents(addDays(todayIso(), -92), addDays(todayIso(), 1))
+    .filter((e) => e.row.kind !== 'Revenu' && !e.row.received && isRetrait(e.row.category)).map((e) => [e.row.id, e.row.title])).values()];
+  const rows = list.map((r) => `<label class="link-line">
+      <input type="checkbox" data-link="${r.id}" ${linked.has(r.id) ? 'checked' : ''}>
+      <span class="body"><span class="title">${esc(r.title)}</span><span class="sub">${frDate(r.first_date)} · ${esc(r.category)}</span></span>
+      <span class="amount minus">−${euro(r.total_cents)}</span></label>`).join('');
   openSheet(`
-    <h3>Lier des retraits</h3>
-    <p class="hint">Coche les dépenses qui sont en fait des retraits d’espèces (par exemple un retrait fixe chaque mois).
-      Leur catégorie ne change pas : elles comptent juste dans ton porte-monnaie.<br>
-      Montant fixe : chaque mois compte depuis le début du suivi (${frDate(cashState().start)}) ; pour compter des mois plus
-      anciens, change la date dans « Recompter ».</p>
-    <div class="link-list">${rows || '<p class="empty">Aucune dépense ces 6 derniers mois.</p>'}</div>
+    <h3>Anciens retraits</h3>
+    <p class="hint">Seules les dépenses de catégorie « Retrait » comptent. Celles depuis le début du suivi
+      (${frDate(start)}) sont déjà dans ton porte-monnaie ; coche ici les plus anciennes dont il te reste du liquide.</p>
+    ${fixed.length ? `<p class="hint">Retrait fixe compté chaque mois depuis le ${frDate(start)} : ${fixed.map(esc).join(', ')}.</p>` : ''}
+    <div class="link-list">${rows || '<p class="empty">Aucun retrait plus ancien que le début du suivi.</p>'}</div>
     <p class="error-text"></p>
     <div class="actions">
       <button type="button" class="secondary" data-close>Annuler</button>
       <button type="submit" class="primary">Enregistrer</button>
     </div>`, async (form) => {
     const fresh = cashData();
-    const shown = new Set(list.map((x) => x.id));
-    const checked = [...form.querySelectorAll('[data-link]:checked')].map((i) => Number(i.dataset.link));
-    // Les liens qui ne sont pas dans la liste affichée (opération supprimée…) restent tels quels.
-    fresh.links = [...fresh.links.filter((id) => !shown.has(id)), ...checked];
+    // Les liens hors catégorie « Retrait » ne servent plus : on les retire.
+    fresh.links = [...form.querySelectorAll('[data-link]:checked')].map((i) => Number(i.dataset.link));
     await saveCash(fresh);
   });
 }
