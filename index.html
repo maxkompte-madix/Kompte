@@ -12,14 +12,14 @@
     // Thème choisi sur ce téléphone, appliqué avant l'affichage (pas d'éclair de l'autre thème).
     try {
       var t = (JSON.parse(localStorage.getItem('kompte-prefs') || '{}').theme) || 'dark';
-      // « Saison » (et anciens thèmes) : la palette dépend du mois (même tableau que SEASONS dans app.js).
-      if (t !== 'dark' && t !== 'rose') t = ['cyber', 'rose', 'tropical', 'tropical', 'tropical', 'tropical', 'ocean', 'ocean', 'tropical', 'halloween', 'noel', 'noel'][new Date().getMonth()];
+      // « Saison » (et anciens thèmes) : palette du jour, retenue par app.js (applyTheme) au dernier lancement.
+      if (t !== 'dark' && t !== 'rose') t = localStorage.getItem('kompte-palette') || 'dark';
       document.documentElement.dataset.theme = t;
-      var c = { rose: '#ffe3f0', halloween: '#1a0f24', noel: '#0f3d2a', ocean: '#0a2540', tropical: '#e8fbef', cyber: '#07060f' }[t];
+      var c = { rose: '#ffe3f0', halloween: '#1a0f24', noel: '#0f3d2a', ocean: '#0a2540', tropical: '#e8fbef', cyber: '#07060f', chinois: '#2a0707', automne: '#1f140c' }[t];
       if (c) document.querySelector('meta[name=theme-color]').content = c;
     } catch (e) {}
   </script>
-  <link rel="stylesheet" href="style.css?v=60">
+  <link rel="stylesheet" href="style.css?v=61">
 </head>
 <body>
   <div id="deco" class="deco" aria-hidden="true"></div>
@@ -43,6 +43,6 @@
   </div>
   <div id="toast" class="toast" hidden></div>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
-  <script src="app.js?v=60"></script>
+  <script src="app.js?v=61"></script>
 </body>
 </html>

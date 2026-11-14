@@ -454,7 +454,7 @@ textarea.input { resize: vertical; font: inherit; font-size: 16px; line-height: 
 @keyframes k-peek { 0%, 70%, 100% { transform: translateX(0); } 80%, 90% { transform: translateX(8px) rotate(8deg); } }
 @keyframes k-float { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-14px); } }
 @keyframes k-snow { from { transform: translate(0, 0); } to { transform: translate(24px, 110vh); } }
-@media (prefers-reduced-motion: reduce) { .deco *, .scene * { animation: none !important; } .flake, .drop, .bubble, .scan, .d-heart, .d-fw { display: none; } }
+@media (prefers-reduced-motion: reduce) { .deco *, .scene * { animation: none !important; } .flake, .drop, .bubble, .scan, .d-heart, .d-fw, .fall, .erain { display: none; } }
 
 /* Bleu océan : bleu marine profond, turquoise */
 :root[data-theme="ocean"] {
@@ -637,3 +637,48 @@ textarea.input { resize: vertical; font: inherit; font-size: 16px; line-height: 
 .d-fw.w2 { right: 6%; top: 34%; width: 54px; animation-delay: -1.6s; }
 .d-fw.w3 { left: 40%; top: 66%; width: 60px; animation-delay: -3s; animation-duration: 5.5s; }
 @keyframes k-burst { 0% { transform: scale(.1); opacity: 0; } 8% { opacity: 1; } 35% { transform: scale(1); opacity: .9; } 55%, 100% { transform: scale(1.15); opacity: 0; } }
+
+/* Jours de fête : bandeau sur l'accueil et pluie d'emojis */
+.fete { margin: -4px 2px 10px; padding: 10px 12px; border-radius: 12px; font-size: 14px; display: flex; align-items: center; gap: 8px;
+  background: var(--card); border: 1px solid var(--accent); }
+.fete .e { font-size: 22px; flex: none; }
+.fete.sober { border-color: var(--border); color: var(--soft); }
+.erain { position: absolute; top: -40px; font-style: normal; opacity: .85; animation: k-fall linear infinite; }
+
+/* Saison › Printemps et Automne : pétales et feuilles qui tombent en tournoyant */
+.fall { top: -30px; opacity: .9; animation: k-fall linear infinite; }
+@keyframes k-fall { 0% { transform: translate(0, 0) rotate(0); } 25% { transform: translate(24px, 27vh) rotate(90deg); }
+  50% { transform: translate(-10px, 55vh) rotate(200deg); } 75% { transform: translate(20px, 82vh) rotate(290deg); }
+  100% { transform: translate(0, 112vh) rotate(380deg); } }
+.d-jelly.hog { width: 46px; left: -22px; top: auto; bottom: calc(70px + var(--safe-bottom)); animation: k-peek 7s ease-in-out infinite; }
+:root[data-theme="automne"] {
+  --bg: #1a110a; --panel: #23170e; --card: #2c1d12; --input: #3a2718;
+  --accent: #ff8c2e; --text: #fff4e8; --muted: #c4a88e; --soft: #ead7c3;
+  --green: #a8d86a; --red: #ff6b5a; --orange: #ffc23d; --blue: #8cc8ff; --turquoise: #6fd6c4;
+  --border: #4a3220; --header: rgba(26, 17, 10, .93); --line: rgba(255, 255, 255, .08);
+}
+:root[data-theme="automne"] body { background: linear-gradient(180deg, #3a2210 0, #1a110a 320px) no-repeat, #1a110a; }
+:root[data-theme="automne"] .brand, :root[data-theme="automne"] .hero small { color: var(--accent); }
+:root[data-theme="automne"] .hero { background: linear-gradient(135deg, #3a2414, #23170e); border-color: #6a4426; }
+:root[data-theme="automne"] .primary, :root[data-theme="automne"] .fab,
+:root[data-theme="automne"] .segmented button.on { background: linear-gradient(135deg, #ffa046, #d6402c); color: #fff; }
+:root[data-theme="automne"] .tabs button.active { color: var(--accent); }
+
+/* Saison › Nouvel An chinois : rouge et or, lanternes, dragon */
+:root[data-theme="chinois"] {
+  --bg: #1c0505; --panel: #260808; --card: #330b0b; --input: #461212;
+  --accent: #ffcc33; --text: #fff5e0; --muted: #d9a99a; --soft: #f3d9c9;
+  --green: #9be08a; --red: #ff7a6a; --orange: #ffcc33; --blue: #8cc8ff; --turquoise: #6fd6c4;
+  --border: #5a1a14; --header: rgba(28, 5, 5, .93); --line: rgba(255, 204, 51, .1);
+}
+:root[data-theme="chinois"] body { background: radial-gradient(circle at 50% 0, #5a0d0d 0, transparent 360px) no-repeat, #1c0505; }
+:root[data-theme="chinois"] .brand, :root[data-theme="chinois"] .hero small { color: var(--accent); }
+:root[data-theme="chinois"] .hero { background: linear-gradient(135deg, #4a0f0f, #2a0808); border: 2px solid #ffcc33;
+  box-shadow: 0 6px 22px rgba(255, 204, 51, .15); }
+:root[data-theme="chinois"] .primary, :root[data-theme="chinois"] .fab,
+:root[data-theme="chinois"] .segmented button.on { background: linear-gradient(135deg, #ffd65a, #e8a317); color: #4a0a0a; }
+:root[data-theme="chinois"] .tabs button.active { color: var(--accent); }
+.d-lantern { width: 26px; top: 50px; transform-origin: top center; animation: k-dangle 4s ease-in-out infinite; }
+.d-lantern.l1 { right: 4px; }
+.d-lantern.l2 { left: 4px; width: 20px; animation-delay: -1.7s; }
+.d-dragon { width: 52px; left: -24px; top: 46%; animation: k-peek 6s ease-in-out infinite; }

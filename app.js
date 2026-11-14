@@ -60,41 +60,121 @@ function prefs() {
 function setPref(key, value) {
   try { localStorage.setItem('kompte-prefs', JSON.stringify({ ...prefs(), [key]: value })); } catch (e) { /* navigation privée */ }
 }
-const THEME_BAR = { dark: '#0b0b0d', rose: '#ffe3f0', halloween: '#1a0f24', noel: '#0f3d2a', ocean: '#0a2540', tropical: '#e8fbef', cyber: '#07060f' };
-/** Thème « Saison » : change tout seul selon le mois (couleurs = palette, dessins = deco). Index 0 = janvier. */
-const SEASONS = [
-  { palette: 'cyber', deco: 'cyber', label: 'Nouvel An néon ⚡' },
-  { palette: 'rose', deco: 'valentin', label: 'Saint-Valentin 💘' },
-  { palette: 'tropical', deco: 'paques', label: 'Pâques &amp; printemps 🐣' },
-  { palette: 'tropical', deco: 'paques', label: 'Pâques &amp; printemps 🐣' },
-  { palette: 'tropical', deco: 'tropical', label: 'Tropical 🌴' },
-  { palette: 'tropical', deco: 'tropical', label: 'Tropical 🌴' },
-  { palette: 'ocean', deco: 'ocean', label: 'Vacances à la mer 🌊' },
-  { palette: 'ocean', deco: 'ocean', label: 'Vacances à la mer 🌊' },
-  { palette: 'tropical', deco: 'tropical', label: 'Été indien 🌴' },
-  { palette: 'halloween', deco: 'halloween', label: 'Halloween 🎃' },
-  { palette: 'noel', deco: 'noel', label: 'Noël 🎄' },
-  { palette: 'noel', deco: 'noel', label: 'Noël 🎄' },
-];
+const THEME_BAR = { dark: '#0b0b0d', rose: '#ffe3f0', halloween: '#1a0f24', noel: '#0f3d2a', ocean: '#0a2540',
+  tropical: '#e8fbef', cyber: '#07060f', chinois: '#2a0707', automne: '#1f140c' };
+
+// ------------------------------------------------------------- calendrier du thème « Saison »
+const dayKey = (d) => `${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+const plusDays = (d, n) => new Date(d.getFullYear(), d.getMonth(), d.getDate() + n);
+const sameDay = (a, b) => a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
+/** Dimanche de Pâques (calcul grégorien de Meeus/Jones/Butcher). */
+function easter(y) {
+  const a = y % 19, b = Math.floor(y / 100), c = y % 100, d = Math.floor(b / 4), e = b % 4, f = Math.floor((b + 8) / 25);
+  const g = Math.floor((b - f + 1) / 3), h = (19 * a + b - d - g + 15) % 30, i = Math.floor(c / 4), k = c % 4;
+  const l = (32 + 2 * e + 2 * i - h - k) % 7, m = Math.floor((a + 11 * h + 22 * l) / 451);
+  const month = Math.floor((h + l - 7 * m + 114) / 31), day = ((h + l - 7 * m + 114) % 31) + 1;
+  return new Date(y, month - 1, day);
+}
+/** Nouvel An chinois (date du 1er jour, animal de l'année). Au-delà de 2037 : à compléter. */
+const CNY = {
+  2026: ['02-17', 'du Cheval'], 2027: ['02-06', 'de la Chèvre'], 2028: ['01-26', 'du Singe'], 2029: ['02-13', 'du Coq'],
+  2030: ['02-03', 'du Chien'], 2031: ['01-23', 'du Cochon'], 2032: ['02-11', 'du Rat'], 2033: ['01-31', 'du Buffle'],
+  2034: ['02-19', 'du Tigre'], 2035: ['02-08', 'du Lapin'], 2036: ['01-28', 'du Dragon'], 2037: ['02-15', 'du Serpent'],
+};
+function cnyDate(y) { const c = CNY[y]; return c ? new Date(y, +c[0].slice(0, 2) - 1, +c[0].slice(3)) : null; }
+/** n-ième dimanche d'un mois (n = -1 : le dernier). */
+function nthSunday(y, month, n) {
+  if (n < 0) { const d = new Date(y, month + 1, 0); return plusDays(d, -d.getDay()); }
+  const d = new Date(y, month, 1); return plusDays(d, (7 - d.getDay()) % 7 + 7 * (n - 1));
+}
+/** Période de l'année (couleurs + dessins). */
+function seasonFor(now) {
+  const y = now.getFullYear(), m = now.getMonth(), day = now.getDate(), d = new Date(y, m, day);
+  const cny = cnyDate(y), e = easter(y);
+  if (cny && d >= plusDays(cny, -1) && d <= plusDays(cny, 7)) return { palette: 'chinois', deco: 'chinois', label: `Nouvel An chinois 🏮` };
+  if (d >= plusDays(e, -7) && d <= plusDays(e, 1)) return { palette: 'tropical', deco: 'paques', label: 'Pâques 🐣' };
+  if (m === 0) return { palette: 'cyber', deco: 'cyber', label: 'Nouvel An néon ⚡' };
+  if (m === 1) return { palette: 'rose', deco: 'valentin', label: 'Saint-Valentin 💘' };
+  if (m >= 2 && m <= 4) return { palette: 'tropical', deco: 'printemps', label: 'Printemps 🌸' };
+  if (m === 5) return { palette: 'tropical', deco: 'tropical', label: 'Tropical 🌴' };
+  if (m === 6 || m === 7) return { palette: 'ocean', deco: 'ocean', label: 'Vacances à la mer 🌊' };
+  if (m === 8) return day < 22 ? { palette: 'tropical', deco: 'tropical', label: 'Été indien 🌴' }
+    : { palette: 'automne', deco: 'automne', label: 'Automne 🍂' };
+  if (m === 9) return { palette: 'halloween', deco: 'halloween', label: 'Halloween 🎃' };
+  return { palette: 'noel', deco: 'noel', label: 'Noël 🎄' };
+}
+/** Fêtes d'une journée (traditionnelles et civiles). sober = commémoration : ni blague ni pluie d'emojis. */
+function fetesFor(d) {
+  const y = d.getFullYear(), e = easter(y), k = dayKey(d), out = [];
+  const add = (cond, f) => { if (cond) out.push(f); };
+  const cny = cnyDate(y);
+  add(cny && sameDay(d, cny), { emoji: '🧧', title: `Nouvel An chinois : année ${CNY[y] && CNY[y][1]}`, hello: 'Bonne année', rain: ['🧧', '🏮', '🧨'],
+    jokes: ['Les enveloppes rouges, c’est pour recevoir de l’argent. Pas pour en dépenser 🧧'] });
+  const fixed = {
+    '01-01': { emoji: '🎆', title: 'Jour de l’An', hello: 'Bonne année', rain: ['🎉', '🥂', '✨'], jokes: ['Bonne année ! Que ton solde soit plus vert que ton sapin de l’an dernier 🎉'] },
+    '01-06': { emoji: '👑', title: 'Épiphanie : la galette des rois', rain: ['👑', '🥧'], jokes: ['Si tu as la fève, c’est toi qui paies la prochaine galette 👑'] },
+    '02-02': { emoji: '🥞', title: 'Chandeleur', rain: ['🥞'], jokes: ['Fais sauter ta crêpe une pièce à la main : ça porte bonheur… à ton épargne 🥞'] },
+    '02-14': { emoji: '💘', title: 'Saint-Valentin', hello: 'Joyeuse Saint-Valentin', rain: ['💖', '🌹'], jokes: ['Le plus romantique aujourd’hui : un budget resto respecté 💘'] },
+    '03-08': { emoji: '💜', title: 'Journée internationale des droits des femmes', sober: true },
+    '03-17': { emoji: '☘️', title: 'Saint-Patrick', rain: ['☘️', '🍀'], jokes: ['Un trèfle à quatre feuilles ne remplace pas un budget 🍀'] },
+    '04-01': { emoji: '🐟', title: 'Poisson d’avril', rain: ['🐟', '🐠'], jokes: ['Ton solde a doublé ! … Poisson d’avril 🐟'] },
+    '05-01': { emoji: '💐', title: 'Fête du Travail : un brin de muguet', rain: ['💐'], jokes: ['Aujourd’hui, même ton porte-monnaie fait le pont.'] },
+    '05-08': { emoji: '🕊️', title: 'Victoire du 8 mai 1945', sober: true },
+    '06-21': { emoji: '🎶', title: 'Fête de la musique', rain: ['🎵', '🎶', '🎸'], jokes: ['Ce soir, la musique est gratuite. La bière, non 🎸'] },
+    '07-14': { emoji: '🎆', title: 'Fête nationale', rain: ['🎆', '🎇'], jokes: ['Le feu d’artifice est gratuit, le pique-nique un peu moins 🎆'] },
+    '08-15': { emoji: '☀️', title: 'Assomption', sober: true },
+    '10-31': { emoji: '🎃', title: 'Halloween', rain: ['🍬', '🎃', '👻'], jokes: ['Ce soir, des enfants viennent réclamer des bonbons. Ta banque, elle, réclame toute l’année 👻'] },
+    '11-01': { emoji: '🕯️', title: 'Toussaint', sober: true },
+    '11-11': { emoji: '🕊️', title: 'Armistice du 11 novembre 1918', sober: true },
+    '12-06': { emoji: '🍊', title: 'Saint-Nicolas', rain: ['🍊', '🍫'], jokes: ['Saint Nicolas apporte des oranges. Ton salaire, lui, arrive le 27 🍊'] },
+    '12-24': { emoji: '🌟', title: 'Réveillon de Noël', rain: ['🎁', '⭐'], jokes: ['Ce soir, on ne regarde pas le solde. Demain non plus 🎁'] },
+    '12-25': { emoji: '🎁', title: 'Noël', hello: 'Joyeux Noël', rain: ['🎁', '🎄', '⭐'], jokes: ['Joyeux Noël ! Le plus beau cadeau : zéro découvert 🎄'] },
+    '12-31': { emoji: '🥂', title: 'Saint-Sylvestre', rain: ['🥂', '🎉', '✨'], jokes: ['Dernière dépense de l’année : choisis-la bien 🥂'] },
+  };
+  if (fixed[k]) out.push(fixed[k]);
+  add(sameDay(d, plusDays(e, -47)), { emoji: '🎭', title: 'Mardi gras', rain: ['🎭', '🥳'], jokes: ['Les beignets, c’est aujourd’hui. Les économies, c’est demain 🎭'] });
+  add(sameDay(d, e), { emoji: '🐣', title: 'Pâques', hello: 'Joyeuses Pâques', rain: ['🥚', '🍫', '🐣'], jokes: ['La chasse aux œufs est ouverte. La chasse aux promos aussi 🥚'] });
+  add(sameDay(d, plusDays(e, 1)), { emoji: '🐰', title: 'Lundi de Pâques', rain: ['🥚', '🍫'], jokes: ['Il reste du chocolat ? Non ? Ton budget dit merci 🍫'] });
+  add(sameDay(d, plusDays(e, 39)), { emoji: '☁️', title: 'Ascension', jokes: ['Pont de l’Ascension : ton budget week-end va-t-il décoller aussi ? ☁️'] });
+  add(sameDay(d, plusDays(e, 49)), { emoji: '🕊️', title: 'Pentecôte', sober: true });
+  add(sameDay(d, plusDays(e, 50)), { emoji: '🕊️', title: 'Lundi de Pentecôte', sober: true });
+  add(sameDay(d, nthSunday(y, 2, 1)), { emoji: '👵', title: 'Fête des grands-mères', rain: ['💐', '🍰'], jokes: ['Un coup de fil à mamie, c’est gratuit et ça vaut de l’or 👵'] });
+  let mothers = nthSunday(y, 4, -1); if (sameDay(mothers, plusDays(e, 49))) mothers = nthSunday(y, 5, 1);
+  add(sameDay(d, mothers), { emoji: '💐', title: 'Fête des mères', rain: ['💐', '💖'], jokes: ['Le plus beau cadeau pour maman : lui dire que tu tiens ton budget 💐'] });
+  add(sameDay(d, nthSunday(y, 5, 3)), { emoji: '👔', title: 'Fête des pères', rain: ['👔', '🛠️'], jokes: ['Papa a toujours dit : « l’argent ne pousse pas sur les arbres » 👔'] });
+  return out;
+}
 /** Thème choisi : « Sombre » et « Rose & argent » sont fixes ; tout le reste (anciens thèmes compris) = Saison. */
 function themeChoice() { const t = prefs().theme; return t === 'dark' || t === 'rose' ? t : 'season'; }
 function look() {
   const t = themeChoice();
-  return t === 'season' ? SEASONS[new Date().getMonth()] : { palette: t, deco: null, label: '' };
+  if (t !== 'season') return { palette: t, deco: null, label: '', fetes: [] };
+  const now = new Date();
+  return { ...seasonFor(now), fetes: fetesFor(now), day: dayKey(now) };
 }
 function applyTheme() {
   const l = look();
   document.documentElement.dataset.theme = l.palette;
+  try { localStorage.setItem('kompte-palette', l.palette); } catch (e) { /* navigation privée */ }
   const meta = document.querySelector('meta[name=theme-color]');
   if (meta) meta.content = THEME_BAR[l.palette] || THEME_BAR.dark;
   const deco = $('#deco');
   if (deco) {
-    deco.dataset.deco = l.deco || '';
-    deco.innerHTML = DECO[l.deco] ? DECO[l.deco]() : '';
+    deco.dataset.key = `${l.deco || ''}|${l.day || ''}`;
+    const fete = l.fetes.find((f) => f.rain);
+    deco.innerHTML = (DECO[l.deco] ? DECO[l.deco]() : '') + (fete ? emojiRain(fete.rain) : '');
   }
 }
-// Le mois change pendant que l'appli reste ouverte : le décor suit.
-setInterval(() => { const d = $('#deco'); if (d && (d.dataset.deco || '') !== (look().deco || '')) { applyTheme(); if (state.all) render(); } }, 60000);
+/** Pluie d'emojis du jour de fête. */
+function emojiRain(list) {
+  return Array.from({ length: 16 }, (_, i) => `<i class="erain" style="left:${(i * 41 + 3) % 100}%;animation-delay:-${(i * 1.3) % 10}s;`
+    + `animation-duration:${8 + (i % 4) * 2}s;font-size:${16 + (i % 3) * 6}px">${list[i % list.length]}</i>`).join('');
+}
+// Le jour change pendant que l'appli reste ouverte : le décor suit.
+setInterval(() => {
+  const d = $('#deco'), l = look();
+  if (d && (d.dataset.key || '') !== `${l.deco || ''}|${l.day || ''}`) { applyTheme(); if (state.all) render(); }
+}, 60000);
 
 // ------------------------------------------- thèmes de fête : petits dessins
 // Dessins maison en SVG, posés par-dessus la page mais jamais cliquables (pointer-events: none).
@@ -209,6 +289,34 @@ const SVG = {
   firework: `<svg viewBox="0 0 60 60"><g stroke-width="2.4" stroke-linecap="round">
     <path d="M30 30L30 4M30 30L30 56M30 30L4 30M30 30L56 30M30 30L12 12M30 30L48 48M30 30L48 12M30 30L12 48" stroke="#ff2bd6"/>
     <path d="M30 30L22 6M30 30L38 54M30 30L6 38M30 30L54 22" stroke="#00f0ff"/></g><circle cx="30" cy="30" r="3" fill="#f5ff3b"/></svg>`,
+
+  // Printemps, automne, Nouvel An chinois
+  petal: `<svg viewBox="0 0 20 14"><path d="M1 7C4 0 14-1 19 7 14 15 4 14 1 7z" fill="#ffc1dc"/><path d="M3 7h14" stroke="#ff9cc8" stroke-width=".8"/></svg>`,
+  sprout: `<svg viewBox="0 0 30 20"><path d="M2 10C8 0 24 0 28 10 24 20 8 20 2 10z" fill="#7cc76b"/><path d="M2 10h26M10 10l5-5M16 10l5-4M10 10l5 5M16 10l5 4" stroke="#4f9a3f" stroke-width="1"/></svg>`,
+  tulips: `<svg viewBox="0 0 60 60"><g stroke="#3f8a3a" stroke-width="2.4"><path d="M18 50V26M30 50V20M42 50V28"/></g>
+    <path d="M18 34q-8-4-8-12 6 2 8 8M42 36q8-4 8-12-6 2-8 8" fill="#5bb04a"/>
+    <path d="M12 16q0 12 6 12t6-12l-3 4-3-6-3 6z" fill="#ff5f8f"/><path d="M24 10q0 12 6 12t6-12l-3 4-3-6-3 6z" fill="#ffd23f"/>
+    <path d="M36 18q0 12 6 12t6-12l-3 4-3-6-3 6z" fill="#b07cff"/><path d="M8 50h44l-4 8H12z" fill="#c86a3b"/></svg>`,
+  bee: `<svg viewBox="0 0 40 30"><ellipse cx="14" cy="8" rx="7" ry="5" fill="#e9f6ff" opacity=".9"/><ellipse cx="24" cy="7" rx="7" ry="5" fill="#e9f6ff" opacity=".9"/>
+    <ellipse cx="20" cy="18" rx="13" ry="9" fill="#ffd23f"/><path d="M14 10v16M21 9v18" stroke="#2b2b2b" stroke-width="3"/>
+    <circle cx="31" cy="16" r="1.6" fill="#222"/><path d="M6 18l-4 1 4 1z" fill="#2b2b2b"/></svg>`,
+  leaf: (c) => `<svg viewBox="0 0 30 30"><path d="M15 2l3 7 7-3-2 8 6 2-7 5 2 6-7-2-2 5-2-5-7 2 2-6-7-5 6-2-2-8 7 3z" fill="${c}"/>
+    <path d="M15 8v20" stroke="rgba(0,0,0,.25)" stroke-width="1.2"/></svg>`,
+  mushroom: `<svg viewBox="0 0 50 50"><path d="M18 26h14l2 20H16z" fill="#f4e6cc"/><path d="M4 28C4 10 46 10 46 28z" fill="#d6402c"/>
+    <circle cx="16" cy="20" r="3" fill="#fff"/><circle cx="30" cy="16" r="3.5" fill="#fff"/><circle cx="38" cy="24" r="2.4" fill="#fff"/>
+    <circle cx="21" cy="34" r="1.4" fill="#222"/><circle cx="29" cy="34" r="1.4" fill="#222"/><path d="M22 39q3 2 6 0" stroke="#222" fill="none"/></svg>`,
+  hedgehog: `<svg viewBox="0 0 60 40"><path d="M6 30q0-24 30-24 20 0 22 16l-4 2 4 4-6 2 3 4H8z" fill="#7a5233"/>
+    <path d="M12 12l4 6M20 8l3 7M30 6l1 7M40 8l-2 7M48 13l-4 5" stroke="#5a3a1e" stroke-width="2"/>
+    <path d="M2 30q2-10 12-10 6 0 8 8z" fill="#e8c39e"/><circle cx="10" cy="24" r="1.6" fill="#222"/><circle cx="2.6" cy="28" r="1.8" fill="#222"/></svg>`,
+  lantern: `<svg viewBox="0 0 40 70"><path d="M20 0v10" stroke="#ffcc33" stroke-width="1.5"/><rect x="12" y="10" width="16" height="5" rx="1" fill="#ffcc33"/>
+    <ellipse cx="20" cy="32" rx="16" ry="18" fill="#e3242b"/><path d="M20 14v36M11 16q-6 16 0 32M29 16q6 16 0 32" stroke="#a5121a" stroke-width="1.4" fill="none"/>
+    <rect x="12" y="49" width="16" height="5" rx="1" fill="#ffcc33"/><path d="M16 54v12M20 54v14M24 54v12" stroke="#ffcc33" stroke-width="1.5"/></svg>`,
+  envelope: `<svg viewBox="0 0 40 54"><rect x="2" y="2" width="36" height="50" rx="3" fill="#e3242b"/><path d="M2 14l18 10 18-10" stroke="#a5121a" stroke-width="1.6" fill="none"/>
+    <circle cx="20" cy="34" r="8" fill="#ffcc33"/><path d="M16 34h8M20 30v8" stroke="#a5121a" stroke-width="1.6"/></svg>`,
+  dragon: `<svg viewBox="0 0 60 60"><path d="M4 34q6-22 30-22 18 0 24 14l-8 2 6 6-10 2 2 8-14-4q-14 6-24 2z" fill="#e3242b"/>
+    <path d="M30 12l4-10 4 10M40 14l6-8 1 10" fill="#ffcc33"/><circle cx="38" cy="24" r="4" fill="#fff"/><circle cx="39" cy="24" r="2" fill="#222"/>
+    <path d="M8 30q-6-2-6-8M10 36q-8 2-10 8" stroke="#ffcc33" stroke-width="2" fill="none" stroke-linecap="round"/>
+    <path d="M14 40q10 4 20 0" stroke="#fff" stroke-width="2" fill="none"/><path d="M16 22q6-4 12 0" stroke="#ffcc33" stroke-width="2" fill="none"/></svg>`,
 };
 const DECO = {
   halloween: () => `
@@ -243,6 +351,18 @@ const DECO = {
     <span class="d-bunny">${SVG.bunny}</span>
     <span class="d-butterfly b1">${SVG.butterfly}</span><span class="d-butterfly b2">${SVG.butterfly}</span>
     <span class="d-hop">${SVG.chick}</span>`,
+  printemps: () => `
+    ${Array.from({ length: 16 }, (_, i) => `<span class="fall" style="left:${(i * 37 + 4) % 100}%;animation-delay:-${(i * 1.6) % 14}s;`
+      + `animation-duration:${10 + (i % 4) * 3}s;width:${i % 3 ? 14 : 20}px">${i % 3 ? SVG.petal : SVG.sprout}</span>`).join('')}
+    <span class="d-butterfly b1">${SVG.butterfly}</span><span class="d-butterfly b3">${SVG.butterfly}</span>`,
+  automne: () => `
+    ${Array.from({ length: 16 }, (_, i) => `<span class="fall" style="left:${(i * 37 + 4) % 100}%;animation-delay:-${(i * 1.6) % 14}s;`
+      + `animation-duration:${10 + (i % 4) * 3}s;width:${16 + (i % 3) * 6}px">${SVG.leaf(['#ff8c2e', '#d6402c', '#ffc23d', '#a8552a'][i % 4])}</span>`).join('')}
+    <span class="d-jelly hog">${SVG.hedgehog}</span>`,
+  chinois: () => `
+    <span class="d-lantern l1">${SVG.lantern}</span><span class="d-lantern l2">${SVG.lantern}</span>
+    <span class="d-dragon">${SVG.dragon}</span>
+    <span class="d-fw w1">${SVG.firework}</span><span class="d-fw w2">${SVG.firework}</span>`,
 };
 /** Petite scène dessinée à droite du « Bonjour » de l'accueil (dans la page : ne cache jamais rien). */
 const SCENE = {
@@ -253,6 +373,9 @@ const SCENE = {
   cyber: () => `<span class="scene"><span class="s-big holo spin">${SVG.globe}</span><span class="s-small holo">${SVG.holocat}</span></span>`,
   valentin: () => `<span class="scene"><span class="s-big wobble">${SVG.letter}</span><span class="s-small beat">${SVG.heart}</span></span>`,
   paques: () => `<span class="scene"><span class="s-small wobble">${SVG.egg}</span><span class="s-big">${SVG.chick}</span><span class="s-small float">${SVG.egg2}</span></span>`,
+  printemps: () => `<span class="scene"><span class="s-big">${SVG.tulips}</span><span class="s-small float">${SVG.bee}</span></span>`,
+  automne: () => `<span class="scene"><span class="s-big wobble">${SVG.mushroom}</span><span class="s-small">${SVG.hedgehog}</span></span>`,
+  chinois: () => `<span class="scene"><span class="s-big wobble">${SVG.lantern}</span><span class="s-small float">${SVG.envelope}</span></span>`,
 };
 /** Petites blagues de l'accueil, selon le thème (une au hasard à chaque affichage). */
 const JOKES = {
@@ -300,6 +423,21 @@ const JOKES = {
     'La mer est salée, l’addition du resto de plage aussi.',
     'Garde la tête hors de l’eau : vérifie ton solde avant la glace à 6 € 🍦',
   ],
+  printemps: [
+    'Le printemps arrive : fais le ménage… dans tes abonnements aussi 🌸',
+    'Les fleurs poussent, ton épargne aussi (on y croit) 🌷',
+    'Une abeille butine sans rien dépenser. Inspire-toi 🐝',
+  ],
+  automne: [
+    'Les feuilles tombent, pas ton budget 🍂',
+    'Le hérisson fait des réserves pour l’hiver. Et toi ? 🦔',
+    'Rentrée : les fournitures sont parties, les feuilles aussi 🍁',
+  ],
+  chinois: [
+    'Nouvel An chinois : nouvelle année, deuxième chance pour les bonnes résolutions 🧧',
+    'Le dragon garde son trésor. Garde le tien 🐉',
+    'Les lanternes montent au ciel, pas tes dépenses 🏮',
+  ],
 };
 function themeHello(theme, evening) {
   if (theme === 'halloween') return evening ? 'Bouhsoir' : 'Bouhjour';
@@ -308,6 +446,7 @@ function themeHello(theme, evening) {
   if (theme === 'cyber' && new Date().getMonth() === 0) return 'Bonne année';
   if (theme === 'ocean') return 'Ahoy';
   if (theme === 'tropical') return 'Aloha';
+  if (theme === 'chinois') return 'Xīn nián kuài lè';
   return evening ? 'Bonsoir' : 'Bonjour';
 }
 
@@ -1930,10 +2069,14 @@ function renderMenu() {
   const balance = getBalance();
   const free = balance === null ? null : availableMoney(balance);
   const hour = new Date().getHours();
-  const theme = look().deco;
-  const hello = themeHello(theme, hour >= 18 || hour < 5);
-  const jokes = JOKES[theme];
-  const joke = jokes ? `<p class="joke">${esc(jokes[Math.floor(Math.random() * jokes.length)])}</p>` : '';
+  const lk = look(), theme = lk.deco, fetes = lk.fetes;
+  const evening = hour >= 18 || hour < 5;
+  const sober = fetes.some((f) => f.sober);
+  const hello = (fetes.find((f) => f.hello) || {}).hello || themeHello(sober ? null : theme, evening);
+  const fj = fetes.find((f) => f.jokes);
+  const jokes = sober ? null : fj ? fj.jokes : JOKES[theme];
+  const joke = (fetes.length ? fetes.map((f) => `<p class="fete${f.sober ? ' sober' : ''}"><span class="e">${f.emoji}</span><span>Aujourd’hui : <b>${esc(f.title)}</b></span></p>`).join('') : '')
+    + (jokes ? `<p class="joke">${esc(jokes[Math.floor(Math.random() * jokes.length)])}</p>` : '');
   const summaryCard = balance === null
     ? `<button type="button" class="hero menu-hero" data-go="dashboard"><small>SOLDE ACTUEL</small>
         <strong>— €</strong><span>Touche ici puis sur la case du solde pour saisir ton solde bancaire.</span></button>`
@@ -2842,13 +2985,15 @@ function phoneSettings() {
   const choice = themeChoice();
   const theme = (id, label) => `<button type="button" class="theme-card ${choice === id ? 'on' : ''}" data-theme-pick="${id}">
       <span class="sw sw-${id}"></span>${label}</button>`;
-  const now = SEASONS[new Date().getMonth()];
+  const now = seasonFor(new Date());
   return `
     <h2>Sur ce téléphone</h2>
     <label class="field">Couleurs</label>
     <div class="themes">${theme('dark', 'Sombre')}${theme('rose', 'Rose &amp; argent')}${theme('season', `Saison<small>${now.label}</small>`)}</div>
-    <p class="hint">« Saison » change tout seul : janvier Nouvel An, février Saint-Valentin, mars–avril Pâques,
-      mai–juin Tropical, juillet–août Vacances à la mer, septembre Été indien, octobre Halloween, novembre–décembre Noël.</p>
+    <p class="hint">« Saison » change tout seul : janvier Nouvel An, Nouvel An chinois (une semaine), février Saint-Valentin,
+      mars–mai Printemps, Pâques (la semaine avant), juin Tropical, juillet–août Vacances à la mer, septembre Été indien puis
+      Automne (dès le 22), octobre Halloween, novembre–décembre Noël. Les jours de fête (Chandeleur, 14 juillet, fête des mères…)
+      ont en plus leur petite surprise sur l’accueil.</p>
     <label class="field" for="start-page">À l’ouverture d’un compte</label>
     <select class="input" id="start-page">
       <option value="menu" ${p.start === 'menu' ? 'selected' : ''}>Afficher l’accueil (les tuiles)</option>
