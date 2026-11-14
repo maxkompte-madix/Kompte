@@ -13,11 +13,11 @@
     try {
       var t = (JSON.parse(localStorage.getItem('kompte-prefs') || '{}').theme) || 'dark';
       document.documentElement.dataset.theme = t;
-      var c = { rose: '#ffe3f0', halloween: '#1a0f24', noel: '#0f3d2a' }[t];
+      var c = { rose: '#ffe3f0', halloween: '#1a0f24', noel: '#0f3d2a', ocean: '#0a2540', tropical: '#e8fbef', cyber: '#07060f' }[t];
       if (c) document.querySelector('meta[name=theme-color]').content = c;
     } catch (e) {}
   </script>
-  <link rel="stylesheet" href="style.css?v=56">
+  <link rel="stylesheet" href="style.css?v=57">
 </head>
 <body>
   <div id="deco" class="deco" aria-hidden="true"></div>
@@ -28,11 +28,11 @@
   </header>
   <main id="view"></main>
   <nav id="tabs" class="tabs" hidden>
-    <button type="button" data-tab="account"><span class="ti">⚙️</span>Réglages</button>
     <button type="button" data-tab="menu"><span class="ti">🏠</span>Accueil</button>
     <button type="button" data-tab="dashboard"><span class="ti">📊</span>Mon mois</button>
     <button type="button" data-tab="transactions"><span class="ti">📋</span>Opérations</button>
     <button type="button" data-tab="savings"><span class="ti">🐷</span>Épargne</button>
+    <button type="button" data-tab="account"><span class="ti">⚙️</span>Réglages</button>
   </nav>
   <button id="fab" class="fab" type="button" aria-label="Nouvelle transaction" hidden>+</button>
   <div id="sheet" class="sheet" hidden>
@@ -41,6 +41,6 @@
   </div>
   <div id="toast" class="toast" hidden></div>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
-  <script src="app.js?v=56"></script>
+  <script src="app.js?v=57"></script>
 </body>
 </html>

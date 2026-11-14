@@ -60,7 +60,7 @@ function prefs() {
 function setPref(key, value) {
   try { localStorage.setItem('kompte-prefs', JSON.stringify({ ...prefs(), [key]: value })); } catch (e) { /* navigation privée */ }
 }
-const THEME_BAR = { dark: '#0b0b0d', rose: '#ffe3f0', halloween: '#1a0f24', noel: '#0f3d2a' };
+const THEME_BAR = { dark: '#0b0b0d', rose: '#ffe3f0', halloween: '#1a0f24', noel: '#0f3d2a', ocean: '#0a2540', tropical: '#e8fbef', cyber: '#07060f' };
 function applyTheme() {
   const theme = prefs().theme;
   document.documentElement.dataset.theme = theme;
@@ -2678,7 +2678,7 @@ function phoneSettings() {
   return `
     <h2>Sur ce téléphone</h2>
     <label class="field">Couleurs</label>
-    <div class="themes">${theme('dark', 'Sombre')}${theme('rose', 'Rose &amp; argent')}${theme('halloween', 'Halloween 🎃')}${theme('noel', 'Noël 🎄')}</div>
+    <div class="themes">${theme('dark', 'Sombre')}${theme('rose', 'Rose &amp; argent')}${theme('halloween', 'Halloween 🎃')}${theme('noel', 'Noël 🎄')}${theme('ocean', 'Bleu océan 🌊')}${theme('tropical', 'Vert tropical 🌴')}${theme('cyber', 'Cyberpunk ⚡')}</div>
     <label class="field" for="start-page">À l’ouverture d’un compte</label>
     <select class="input" id="start-page">
       <option value="menu" ${p.start === 'menu' ? 'selected' : ''}>Afficher l’accueil (les tuiles)</option>
