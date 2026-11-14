@@ -60,11 +60,89 @@ function prefs() {
 function setPref(key, value) {
   try { localStorage.setItem('kompte-prefs', JSON.stringify({ ...prefs(), [key]: value })); } catch (e) { /* navigation privée */ }
 }
+const THEME_BAR = { dark: '#0b0b0d', rose: '#ffe3f0', halloween: '#1a0f24', noel: '#0f3d2a' };
 function applyTheme() {
   const theme = prefs().theme;
   document.documentElement.dataset.theme = theme;
   const meta = document.querySelector('meta[name=theme-color]');
-  if (meta) meta.content = theme === 'rose' ? '#ffe3f0' : '#0b0b0d';
+  if (meta) meta.content = THEME_BAR[theme] || THEME_BAR.dark;
+  const deco = $('#deco');
+  if (deco) deco.innerHTML = DECO[theme] ? DECO[theme]() : '';
+}
+
+// ------------------------------------------- thèmes de fête : petits dessins
+// Dessins maison en SVG, posés par-dessus la page mais jamais cliquables (pointer-events: none).
+const SVG = {
+  pumpkin: `<svg viewBox="0 0 64 56"><path d="M30 10c0-5 3-8 7-9l2 3c-3 1-5 3-5 6z" fill="#4f7a2a"/>
+    <ellipse cx="18" cy="32" rx="14" ry="20" fill="#e06a12"/><ellipse cx="46" cy="32" rx="14" ry="20" fill="#e06a12"/>
+    <ellipse cx="32" cy="32" rx="15" ry="22" fill="#f7821b"/>
+    <path d="M20 26l7-6 3 8zM44 26l-7-6-3 8z" fill="#3a1600"/>
+    <path d="M17 38q15 12 30 0l-4 2-3-3-3 4-4-4-3 4-3-4-3 3z" fill="#3a1600"/></svg>`,
+  bat: `<svg viewBox="0 0 80 36"><path d="M40 12c-3 0-4-4-4-6 2 1 3 2 4 2s2-1 4-2c0 2-1 6-4 6zM36 12C28 4 14 2 2 8c6 2 9 6 9 12 4-3 9-3 12 1 2-4 7-5 10-2 1-3 2-6 3-7zM44 12c8-8 22-10 34-4-6 2-9 6-9 12-4-3-9-3-12 1-2-4-7-5-10-2-1-3-2-6-3-7z" fill="#7a45a8"/>
+    <circle cx="38.5" cy="9" r=".9" fill="#ffd23f"/><circle cx="41.5" cy="9" r=".9" fill="#ffd23f"/></svg>`,
+  ghost: `<svg viewBox="0 0 50 62"><path d="M25 2C12 2 4 12 4 26v32l7-6 7 6 7-6 7 6 7-6 7 6V26C46 12 38 2 25 2z" fill="#f4f0ff"/>
+    <ellipse cx="18" cy="24" rx="3.5" ry="5" fill="#2a1638"/><ellipse cx="32" cy="24" rx="3.5" ry="5" fill="#2a1638"/>
+    <ellipse cx="25" cy="36" rx="4" ry="5" fill="#2a1638"/><circle cx="12" cy="31" r="3" fill="#ffb3c7" opacity=".6"/><circle cx="38" cy="31" r="3" fill="#ffb3c7" opacity=".6"/></svg>`,
+  spider: `<svg viewBox="0 0 40 80"><line x1="20" y1="0" x2="20" y2="52" stroke="#b9a8d4" stroke-width="1"/>
+    <g stroke="#1b0f26" stroke-width="2.4" fill="none" stroke-linecap="round"><path d="M14 58l-9-6-3 6M14 62l-11 0-2 6M14 66l-9 6 0 6M26 58l9-6 3 6M26 62l11 0 2 6M26 66l9 6 0 6"/></g>
+    <ellipse cx="20" cy="62" rx="8" ry="9" fill="#1b0f26"/><circle cx="17" cy="60" r="2" fill="#fff"/><circle cx="23" cy="60" r="2" fill="#fff"/>
+    <circle cx="17.4" cy="60.5" r="1" fill="#000"/><circle cx="23.4" cy="60.5" r="1" fill="#000"/></svg>`,
+  tree: `<svg viewBox="0 0 60 80"><rect x="25" y="64" width="10" height="12" fill="#7a4a24"/>
+    <path d="M30 6l-16 24h8l-14 18h9L4 66h52L43 48h9L38 30h8z" fill="#1f8a4c"/>
+    <path d="M30 0l2.4 5 5.4.6-4 3.6 1.2 5.3L30 11.8l-5 2.7 1.2-5.3-4-3.6 5.4-.6z" fill="#ffd23f"/>
+    <circle cx="24" cy="30" r="2.6" fill="#e23b3b"/><circle cx="36" cy="40" r="2.6" fill="#ffd23f"/><circle cx="20" cy="52" r="2.6" fill="#4fa3ff"/>
+    <circle cx="40" cy="56" r="2.6" fill="#e23b3b"/><circle cx="30" cy="22" r="2.2" fill="#4fa3ff"/></svg>`,
+  snowman: `<svg viewBox="0 0 56 80"><circle cx="28" cy="58" r="18" fill="#fff"/><circle cx="28" cy="30" r="13" fill="#fff"/>
+    <rect x="17" y="12" width="22" height="4" fill="#222"/><rect x="20" y="0" width="16" height="13" fill="#222"/><rect x="20" y="9" width="16" height="3" fill="#e23b3b"/>
+    <circle cx="23" cy="27" r="1.6" fill="#222"/><circle cx="33" cy="27" r="1.6" fill="#222"/><path d="M28 30l9 2-9 1z" fill="#f7821b"/>
+    <path d="M22 35q6 4 12 0" stroke="#222" stroke-width="1.4" fill="none"/>
+    <path d="M15 42h26l-3 5H18z" fill="#e23b3b"/><path d="M36 44l5 12-5-1z" fill="#e23b3b"/>
+    <circle cx="28" cy="54" r="1.8" fill="#222"/><circle cx="28" cy="62" r="1.8" fill="#222"/></svg>`,
+  gift: `<svg viewBox="0 0 50 50"><rect x="5" y="18" width="40" height="30" rx="3" fill="#e23b3b"/><rect x="2" y="12" width="46" height="9" rx="2" fill="#c42828"/>
+    <rect x="21" y="12" width="8" height="36" fill="#ffd23f"/><path d="M25 12C18 2 8 4 12 10c2 3 9 2 13 2zM25 12c7-10 17-8 13-2-2 3-9 2-13 2z" fill="#ffd23f"/></svg>`,
+  holly: `<svg viewBox="0 0 60 36"><path d="M30 18C22 6 10 4 2 8c4 2 4 6 2 9 5-1 7 2 7 6 4-3 8-2 10 1 1-3 4-5 9-6z" fill="#1f8a4c"/>
+    <path d="M30 18c8-12 20-14 28-10-4 2-4 6-2 9-5-1-7 2-7 6-4-3-8-2-10 1-1-3-4-5-9-6z" fill="#27a35b"/>
+    <circle cx="26" cy="20" r="4" fill="#e23b3b"/><circle cx="34" cy="20" r="4" fill="#e23b3b"/><circle cx="30" cy="25" r="4" fill="#c42828"/></svg>`,
+};
+const DECO = {
+  halloween: () => `
+    <span class="d-spider">${SVG.spider}</span>
+    <span class="d-bat b1">${SVG.bat}</span><span class="d-bat b2">${SVG.bat}</span><span class="d-bat b3">${SVG.bat}</span>
+    <span class="d-ghost">${SVG.ghost}</span>`,
+  noel: () => `
+    ${Array.from({ length: 18 }, (_, i) => `<i class="flake" style="left:${(i * 37) % 100}%;animation-delay:-${(i * 1.7) % 12}s;`
+      + `animation-duration:${9 + (i % 5) * 2}s;font-size:${10 + (i % 4) * 4}px">❄</i>`).join('')}
+    <span class="d-holly">${SVG.holly}</span>
+    <span class="d-snowman">${SVG.snowman}</span>`,
+};
+/** Petite scène dessinée à droite du « Bonjour » de l'accueil (dans la page : ne cache jamais rien). */
+const SCENE = {
+  halloween: () => `<span class="scene"><span class="s-big wobble">${SVG.pumpkin}</span><span class="s-small float">${SVG.ghost}</span></span>`,
+  noel: () => `<span class="scene"><span class="s-big">${SVG.tree}</span><span class="s-small wobble">${SVG.gift}</span></span>`,
+};
+/** Petites blagues de l'accueil, selon le thème (une au hasard à chaque affichage). */
+const JOKES = {
+  halloween: [
+    'Ton relevé de compte fait plus peur qu’un fantôme 👻',
+    'Les citrouilles ont un budget. Pourquoi pas toi ? 🎃',
+    'Attention : certaines dépenses reviennent d’entre les morts (les abonnements).',
+    'Une chauve-souris a vu tes achats en ligne. Elle ne dira rien. 🦇',
+    'Bonbon ou facture ? Malheureusement, c’est facture.',
+    'Ce mois-ci, le seul truc hanté, c’est ta carte bancaire.',
+  ],
+  noel: [
+    'Le Père Noël a vu ton compte. Il hésite pour le cadeau 🎅',
+    'Rappel : les lutins ne remboursent pas les découverts.',
+    'Vin chaud : 4 €. Ta tête en voyant le solde : gratuit.',
+    'Cette année, offre-toi le plus beau cadeau : un budget respecté 🎁',
+    'Le bonhomme de neige fond, ton épargne ne devrait pas ⛄',
+    'Ho ho ho… oh non, les cadeaux sont débités.',
+  ],
+};
+function themeHello(theme, evening) {
+  if (theme === 'halloween') return evening ? 'Bouhsoir' : 'Bouhjour';
+  if (theme === 'noel') return 'Ho ho ho';
+  return evening ? 'Bonsoir' : 'Bonjour';
 }
 
 /** Pages : nom affiché et petite aide en haut (masquable dans Réglages). */
@@ -1686,7 +1764,10 @@ function renderMenu() {
   const balance = getBalance();
   const free = balance === null ? null : availableMoney(balance);
   const hour = new Date().getHours();
-  const hello = hour >= 18 || hour < 5 ? 'Bonsoir' : 'Bonjour';
+  const theme = prefs().theme;
+  const hello = themeHello(theme, hour >= 18 || hour < 5);
+  const jokes = JOKES[theme];
+  const joke = jokes ? `<p class="joke">${esc(jokes[Math.floor(Math.random() * jokes.length)])}</p>` : '';
   const summaryCard = balance === null
     ? `<button type="button" class="hero menu-hero" data-go="dashboard"><small>SOLDE ACTUEL</small>
         <strong>— €</strong><span>Touche ici puis sur la case du solde pour saisir ton solde bancaire.</span></button>`
@@ -1706,11 +1787,11 @@ function renderMenu() {
     ['sheet:spending', '🍩', 'Répartition', 'Où part mon argent', 'rose'],
     ['sheet:notes', '📝', notes ? `Notes (${notes})` : 'Notes', 'Pense-bêtes et calculs', 'lemon'],
     ['check', '🏦', 'Vérifier', 'Comparer avec la banque', 'silver'],
-    ['account', '⚙️', 'Réglages', 'Couleurs, mois, catégories', 'silver'],
   ];
   if (state.all.comptes.length > 1) tiles.push(['switch', '👛', 'Changer de compte', 'Voir tous les comptes', 'lilac']);
   view.innerHTML = `
-    <div class="menu-head">${logoImg(state.compte, 'big')}<p class="menu-hello">${hello} !<small>${esc(compteName(state.compte))}</small></p></div>
+    <div class="menu-head">${logoImg(state.compte, 'big')}<p class="menu-hello">${hello} !<small>${esc(compteName(state.compte))}</small></p>${SCENE[theme] ? SCENE[theme]() : ''}</div>
+    ${joke}
     ${summaryCard}
     ${roundupCard()}
     <button type="button" class="primary wide menu-add" id="m-add">＋ Ajouter une dépense ou une rentrée</button>
@@ -2597,7 +2678,7 @@ function phoneSettings() {
   return `
     <h2>Sur ce téléphone</h2>
     <label class="field">Couleurs</label>
-    <div class="themes">${theme('dark', 'Sombre')}${theme('rose', 'Rose &amp; argent')}</div>
+    <div class="themes">${theme('dark', 'Sombre')}${theme('rose', 'Rose &amp; argent')}${theme('halloween', 'Halloween 🎃')}${theme('noel', 'Noël 🎄')}</div>
     <label class="field" for="start-page">À l’ouverture d’un compte</label>
     <select class="input" id="start-page">
       <option value="menu" ${p.start === 'menu' ? 'selected' : ''}>Afficher l’accueil (les tuiles)</option>
