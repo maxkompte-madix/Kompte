@@ -702,3 +702,13 @@ textarea.input { resize: vertical; font: inherit; font-size: 16px; line-height: 
 .link-line .title em { font-style: normal; font-size: 11px; color: var(--orange); }
 .link-line .sub { font-size: 12px; color: var(--muted); }
 .link-line .amount { font-size: 14px; white-space: nowrap; }
+.cash-split b small { color: var(--muted); font-weight: 400; }
+.cash-split.over .bar i { background: var(--red); }
+.cash-split.over b { color: var(--red); }
+.cash-row { opacity: .85; }
+.muted-s { font-size: 12px; font-weight: 400; color: var(--muted); }
+.cash-split b small { color: var(--muted); font-weight: 400; }
+.cash-split.over .bar i { background: var(--red); }
+.cash-split.over b { color: var(--red); }
+.cash-row { opacity: .85; }
+.muted-s { font-size: 12px; font-weight: 400; color: var(--muted); }

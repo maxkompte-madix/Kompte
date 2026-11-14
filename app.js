@@ -457,7 +457,7 @@ const PAGES = {
   transactions: { label: 'Opérations', help: 'Toutes les dépenses et rentrées du mois. Touche une ligne pour la modifier ; cherche un mot ou filtre par catégorie.' },
   fixed: { label: 'Montants fixes', help: 'Ce qui revient chaque mois (salaire, loyer, abonnements…). Touche une ligne pour la modifier, changer un seul mois ou l’arrêter.' },
   savings: { label: 'Épargne', help: 'Tes comptes d’épargne. « + Verser » ou « − Retirer » pour bouger de l’argent ; les poches le répartissent par projet.' },
-  cash: { label: 'Espèces', help: 'L’argent liquide retiré au distributeur. Un retrait = une dépense « Retrait » (comptée dans ton mois) ; ici, tu suis ce qu’il reste dans ton porte-monnaie et où il part.' },
+  cash: { label: 'Suivi des espèces', help: 'Un retrait = une dépense « Retrait » (comptée dans ton mois). Ce que tu paies en liquide = catégorie « En espèce » : hors solde, ça baisse seulement ton porte-monnaie.' },
   check: { label: 'Vérifier', help: 'Télécharge le relevé sur le site de ta banque (OFX, CSV ou QIF) et choisis-le ici : Kompte montre ce qui manque. Rien n’est enregistré.' },
   account: { label: 'Réglages', help: 'Les choix « Sur ce téléphone » ne changent que ce téléphone ; les autres sont partagés avec le PC.' },
 };
@@ -1047,7 +1047,7 @@ function budgetLabel(key) {
 function budgetKeys() {
   const keys = [];
   for (const c of categories()) {
-    if (c.name === 'Revenus') continue;
+    if (c.name === 'Revenus' || isCashCat(c.name)) continue; // « En espèce » : budgets dans le Suivi des espèces
     keys.push(c.name, ...c.subs.map((s) => `${c.name}|${s.id}`));
   }
   return keys;
@@ -1764,9 +1764,10 @@ function fixedEvents(start, end) {
   return out;
 }
 
-function occurrences(start, end) {
+function occurrences(start, end, withCash = false) {
   const results = [];
   for (const row of state.data.items) {
+    if (!withCash && isCashCat(row.category)) continue; // « En espèce » : hors solde (voir Suivi des espèces)
     const base = row.first_date;
     if (!(base < end)) continue;
     if (row.frequency !== 'Unique') {
@@ -1789,7 +1790,7 @@ function occurrences(start, end) {
       }
     }
   }
-  results.push(...fixedEvents(start, end));
+  results.push(...fixedEvents(start, end).filter((e) => withCash || !isCashCat(e.row.category)));
   return results.sort((a, b) => (a.due < b.due ? 1 : a.due > b.due ? -1 : b.row.id - a.row.id));
 }
 
@@ -2094,7 +2095,7 @@ function renderMenu() {
     ['transactions', '📋', 'Opérations', 'Toutes les dépenses du mois', 'lilac'],
     ['fixed', '🔁', 'Montants fixes', 'Loyer, salaire, abonnements', 'peach'],
     ['savings', '🐷', 'Épargne', 'Livrets et poches', 'mint'],
-    ['cash', '💶', 'Espèces', 'Retraits et porte-monnaie', 'peach'],
+    ['cash', '💶', 'Suivi des espèces', 'Retraits et porte-monnaie', 'peach'],
     ['sheet:budgets', '🎯', 'Budgets', 'Combien dépenser par catégorie', 'sky'],
     ['sheet:spending', '🍩', 'Répartition', 'Où part mon argent', 'rose'],
     ['sheet:notes', '📝', notes ? `Notes (${notes})` : 'Notes', 'Pense-bêtes et calculs', 'lemon'],
@@ -2114,35 +2115,74 @@ function renderMenu() {
     ${prefs().help ? '<p class="note" style="text-align:center">Pour revenir ici : touche le logo en haut à gauche, ou 🏠 en bas.</p>' : ''}`;
   const reminder = $('#sheet').hidden ? payReminder() : null;
   if (reminder) paySheet(reminder);
+  ensureCashSetup().then((done) => { if (done) refresh(true); }).catch(() => { /* réessaie au prochain affichage */ });
 }
 
 
 // ------------------------------------------------------------------ espèces
-// Suivi de l'argent liquide, propre au téléphone et partagé entre téléphones (réglage « cash », que le PC ignore).
-// Un retrait = une dépense de catégorie « Retrait » (comptée normalement dans le mois, PC compris).
-// Les dépenses en espèces ne sont PAS des transactions : elles ne comptent pas une 2e fois dans le mois.
-// cash = { [compteId]: { start: 'AAAA-MM-JJ', subs: [{id, name}], ops: [{id, date, cents, kind: 'spend'|'adjust', sub, note}],
-//                        links: [id] } } : anciens retraits (catégorie « Retrait », datés d'avant « start ») à compter quand même.
-// Seules les opérations de catégorie « Retrait » comptent : un lien vers une autre catégorie est ignoré.
+// « Suivi des espèces ». Un retrait = une dépense de catégorie « Retrait » (comptée dans le mois et le solde).
+// Une dépense payée en liquide = une transaction de catégorie « En espèce » (sous-catégories partagées, budgets propres) :
+// elle est HORS SOLDE : occurrences() l'écarte de tous les totaux, elle ne fait que baisser le porte-monnaie.
+// (Ainsi elle se saisit comme les autres : bouton Ajouter, commande vocale.) Un revenu « En espèce » remplit le porte-monnaie.
+// Réglage partagé « cash » (ignoré par le PC) = { [compteId]: { start, ops: [{id, date, cents, kind: 'adjust'}],
+//   links: [id] (anciens retraits d'avant « start »), budgets: { subId: centimes par mois }, migrated } }.
+// (Avant la v65, les dépenses en liquide étaient dans ops (kind 'spend') : converties une fois en transactions.)
+const CASH_CAT = 'En espèce';
 const CASH_SUBS = [{ id: 'boulangerie', name: 'Boulangerie' }, { id: 'marche', name: 'Marché' }, { id: 'cafe', name: 'Café & resto' },
                    { id: 'pourboires', name: 'Pourboires' }, { id: 'divers', name: 'Divers' }];
-const isRetrait = (name) => /^retraits?$/.test(String(name).normalize('NFD').replace(/[̀-ͯ]/g, '').trim().toLowerCase());
+const plainName = (name) => String(name).normalize('NFD').replace(/[̀-ͯ]/g, '').trim().toLowerCase();
+const isRetrait = (name) => /^retraits?$/.test(plainName(name));
+const isCashCat = (name) => /^(en )?especes?$/.test(plainName(name));
+function cashCategory() { return categories().find((c) => isCashCat(c.name)) || null; }
 function cashData() {
   const raw = state.all.kv.cash && typeof state.all.kv.cash === 'object' ? state.all.kv.cash : {};
   const c = raw[state.compte] && typeof raw[state.compte] === 'object' ? raw[state.compte] : {};
+  const cat = cashCategory();
+  const budgets = {};
+  if (c.budgets && typeof c.budgets === 'object') for (const [k, v] of Object.entries(c.budgets)) if (Number.isInteger(v) && v > 0) budgets[k] = v;
   return { start: /^\d{4}-\d{2}-\d{2}$/.test(c.start) ? c.start : null,
-           subs: cleanSubs(c.subs) || CASH_SUBS.map((x) => ({ ...x })),
+           subs: cat ? cat.subs : cleanSubs(c.subs) || CASH_SUBS.map((x) => ({ ...x })),
            ops: Array.isArray(c.ops) ? c.ops.filter((o) => o && Number.isInteger(o.cents) && /^\d{4}-\d{2}-\d{2}$/.test(o.date)) : [],
-           links: Array.isArray(c.links) ? [...new Set(c.links.filter(Number.isInteger))] : [] };
+           links: Array.isArray(c.links) ? [...new Set(c.links.filter(Number.isInteger))] : [],
+           budgets, migrated: !!c.migrated, oldSubs: cleanSubs(c.subs) };
 }
 async function saveCash(c) {
   const raw = state.all.kv.cash && typeof state.all.kv.cash === 'object' ? state.all.kv.cash : {};
-  const value = { ...raw, [state.compte]: { start: c.start || todayIso(), subs: c.subs, ops: c.ops, links: c.links || [] } };
+  const value = { ...raw, [state.compte]: { start: c.start || todayIso(), ops: c.ops, links: c.links || [], budgets: c.budgets || {},
+                                            migrated: !!c.migrated, ...(c.oldSubs ? { subs: c.oldSubs } : {}) } };
   state.all.kv.cash = value;
   await check(sb.from('kv_settings').upsert({ key: 'cash', value }, { onConflict: 'user_id,key' }));
 }
+/** Crée la catégorie partagée « En espèce » (avec les sous-catégories du suivi) et convertit les anciennes dépenses en liquide. */
+let cashSetupBusy = false;
+async function ensureCashSetup() {
+  if (cashSetupBusy || !state.all || state.compte === null) return false;
+  const c = cashData();
+  const spends = c.ops.filter((o) => o.kind === 'spend');
+  if (cashCategory() && (c.migrated || !spends.length)) return false;
+  cashSetupBusy = true;
+  try {
+    if (!cashCategory()) {
+      await saveCategories([...categories(), { name: CASH_CAT, color: '#34D399', icon: 'Divers', savings: false, cushion: false,
+                                               subs: c.oldSubs || CASH_SUBS.map((x) => ({ ...x })) }]);
+    }
+    for (const o of spends) {
+      const id = newId();
+      const subName = (c.oldSubs || CASH_SUBS).find((x) => x.id === o.sub);
+      await check(sb.from('items').insert({ id, compte_id: state.compte, title: o.note || (subName ? subName.name : 'Espèces'), kind: 'Dépense',
+                                            category: CASH_CAT, total_cents: o.cents, first_date: o.date, installments: 1,
+                                            frequency: 'Unique', vers_compte_id: null, created_at: utcStamp() }));
+      if (o.sub) await setSub(id, o.sub);
+    }
+    const fresh = cashData();
+    fresh.ops = fresh.ops.filter((o) => o.kind !== 'spend');
+    fresh.migrated = true;
+    await saveCash(fresh);
+    return true;
+  } finally { cashSetupBusy = false; }
+}
 function retraitCategory() { return categories().find((c) => isRetrait(c.name)) || null; }
-/** Retraits du compte jusqu'à aujourd'hui : dépenses « Retrait » depuis le début du suivi, et opérations liées. */
+/** Retraits du compte jusqu'à aujourd'hui : dépenses « Retrait » depuis le début du suivi, et anciens retraits cochés. */
 function cashRetraits(start, links = []) {
   const end = addDays(todayIso(), 1);
   const linked = new Set(links);
@@ -2151,46 +2191,60 @@ function cashRetraits(start, links = []) {
   return occurrences(from, end).filter((e) => e.row.kind !== 'Revenu' && !e.row.received && isRetrait(e.row.category)
     && (e.due >= start || (e.row.id > 0 && linked.has(e.row.id))));
 }
+/** Opérations « En espèce » (hors solde) entre deux dates. */
+function cashMoves(start, end) { return occurrences(start, end, true).filter((e) => isCashCat(e.row.category)); }
 function cashState() {
   const c = cashData();
   const start = c.start || todayIso();
   const today = todayIso();
   const retraits = cashRetraits(start, c.links);
-  const ops = c.ops.filter((o) => o.date >= start && o.date <= today);
-  const inWallet = retraits.reduce((s, e) => s + e.amount, 0)
-    + ops.reduce((s, o) => s + (o.kind === 'adjust' ? o.cents : -o.cents), 0);
-  return { c, start, retraits, ops, inWallet };
+  const moves = cashMoves(start, addDays(today, 1));
+  const ops = c.ops.filter((o) => o.kind === 'adjust' && o.date >= start && o.date <= today);
+  const inWallet = retraits.reduce((s, e) => s + e.amount, 0) + ops.reduce((s, o) => s + o.cents, 0)
+    + moves.reduce((s, e) => s + (e.row.kind === 'Revenu' ? e.amount : -e.amount), 0);
+  return { c, start, retraits, moves, ops, inWallet };
 }
-function cashSubName(c, id) { const x = c.subs.find((s) => s.id === String(id)); return x ? x.name : 'Sans sous-catégorie'; }
 
 function renderCash() {
-  const { c, start, retraits, ops, inWallet } = cashState();
+  const { c, start, retraits, moves, ops, inWallet } = cashState();
   const ym = todayIso().slice(0, 7);
   const monthOut = retraits.filter((e) => e.due.startsWith(ym)).reduce((s, e) => s + e.amount, 0);
-  const monthSpent = ops.filter((o) => o.kind !== 'adjust' && o.date.startsWith(ym)).reduce((s, o) => s + o.cents, 0);
+  const spentMonth = cashMoves(`${ym}-01`, monthShift(`${ym}-01`, 1)).filter((e) => e.row.kind !== 'Revenu');
+  const monthSpent = spentMonth.reduce((s, e) => s + e.amount, 0);
   const bySub = new Map();
-  for (const o of ops) if (o.kind !== 'adjust' && o.date.startsWith(ym)) bySub.set(o.sub || '', (bySub.get(o.sub || '') || 0) + o.cents);
-  const split = [...bySub].sort((a, b) => b[1] - a[1]).map(([id, cents]) => `
-      <div class="cash-split"><span>${esc(cashSubName(c, id))}</span><span class="bar"><i style="width:${monthSpent ? Math.round(cents * 100 / monthSpent) : 0}%"></i></span><b>${euro(cents)}</b></div>`).join('');
+  for (const e of spentMonth) { const sub = subOf(e.row); const k = sub ? sub.id : ''; bySub.set(k, (bySub.get(k) || 0) + e.amount); }
+  const subName = (id) => { const x = c.subs.find((s) => s.id === id); return x ? x.name : 'Sans sous-catégorie'; };
+  const keys = [...new Set([...c.subs.map((s) => s.id).filter((id) => bySub.has(id) || c.budgets[id]), ...bySub.keys()])];
+  const lines = keys.map((id) => {
+    const spent = bySub.get(id) || 0, budget = c.budgets[id] || 0;
+    const ratio = budget ? spent / budget : monthSpent ? spent / monthSpent : 0;
+    const over = budget && spent > budget;
+    return `<div class="cash-split${over ? ' over' : ''}"><span>${esc(subName(id))}</span>
+      <span class="bar"><i style="width:${Math.min(100, Math.round(ratio * 100))}%"></i></span>
+      <b>${euro(spent)}${budget ? `<small> / ${euro(budget)}</small>` : ''}</b></div>`;
+  }).join('');
+  const budgetTotal = Object.entries(c.budgets).filter(([id]) => c.subs.some((s) => s.id === id)).reduce((s, [, v]) => s + v, 0);
   const history = [
     ...retraits.map((e) => ({ date: e.due, html: `<button type="button" class="row" data-item="${e.row.id}" data-due="${e.due}">
         ${catIcon(e.row.category)}<span class="body"><span class="title">${esc(e.row.title)}</span><span class="sub">Retrait${e.row.id < 0 ? ' fixe' : e.due < start ? ' ancien' : ''} · ${frDate(e.due)}</span></span>
         <span class="amount plus">+${euro(e.amount)}</span></button>` })),
+    ...moves.map((e) => { const plus = e.row.kind === 'Revenu'; const sub = subOf(e.row);
+      return { date: e.due, html: `<button type="button" class="row" data-item="${e.row.id}" data-due="${e.due}">
+        ${catIcon(e.row.category)}<span class="body"><span class="title">${esc(e.row.title)}</span>
+        <span class="sub">${sub ? esc(sub.name) : 'En espèce'} · ${frDate(e.due)}</span></span>
+        <span class="amount ${plus ? 'plus' : 'minus'}">${plus ? '+' : '−'}${euro(e.amount)}</span></button>` }; }),
     ...ops.map((o) => ({ date: o.date, html: `<button type="button" class="row" data-cash-op="${esc(o.id)}">
-        <span class="cash-ico">${o.kind === 'adjust' ? '🔄' : '💶'}</span>
-        <span class="body"><span class="title">${esc(o.kind === 'adjust' ? 'Recompté' : o.note || cashSubName(c, o.sub))}</span>
-        <span class="sub">${o.kind === 'adjust' ? 'Correction' : esc(cashSubName(c, o.sub))} · ${frDate(o.date)}</span></span>
-        <span class="amount ${o.kind === 'adjust' ? (o.cents >= 0 ? 'plus' : 'minus') : 'minus'}">${o.kind === 'adjust' ? (o.cents >= 0 ? '+' : '−') : '−'}${euro(Math.abs(o.cents))}</span></button>` })),
+        <span class="cash-ico">🔄</span><span class="body"><span class="title">Recompté</span><span class="sub">Correction · ${frDate(o.date)}</span></span>
+        <span class="amount ${o.cents >= 0 ? 'plus' : 'minus'}">${o.cents >= 0 ? '+' : '−'}${euro(Math.abs(o.cents))}</span></button>` })),
   ].sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0)).slice(0, 80).map((h) => h.html).join('');
-  const noCat = !retraitCategory();
   const oldCount = retraits.filter((e) => e.due < start).length;
   view.innerHTML = `
-    <h2>Espèces</h2>
+    <h2>Suivi des espèces</h2>
     <div class="hero cash-hero"><small>DANS TON PORTE-MONNAIE</small>
       <strong style="${inWallet < 0 ? 'color:var(--red)' : ''}">${euro(inWallet)}</strong>
       <span>Suivi depuis le ${frDate(start)}${c.start ? '' : ' (aujourd’hui)'}</span></div>
-    ${noCat ? `<div class="cash-warn">Pour suivre tes retraits, il faut une catégorie « Retrait » (pense à y mettre aussi ton retrait fixe du mois).
-      <button type="button" class="primary wide" id="c-make-cat">Créer la catégorie « Retrait »</button></div>` : ''}
+    ${retraitCategory() ? '' : `<div class="cash-warn">Pour suivre tes retraits, il faut une catégorie « Retrait » (pense à y mettre aussi ton retrait fixe du mois).
+      <button type="button" class="primary wide" id="c-make-cat">Créer la catégorie « Retrait »</button></div>`}
     <button type="button" class="primary wide" id="c-spend">＋ Dépense en espèces</button>
     <div class="cash-btns">
       <button type="button" class="secondary" id="c-retrait">🏧 Ajouter un retrait</button>
@@ -2199,54 +2253,47 @@ function renderCash() {
     <button type="button" class="secondary wide" id="c-link" style="margin-bottom:12px">🔗 Ajouter d’anciens retraits${oldCount ? ` (${oldCount})` : ''}</button>
     <div class="metrics">
       <div class="metric"><small>Retiré ce mois-ci</small><b style="color:var(--green)">${euro(monthOut)}</b></div>
-      <div class="metric"><small>Dépensé en espèces</small><b style="color:var(--red)">${euro(monthSpent)}</b></div>
+      <div class="metric"><small>Dépensé en espèces</small><b style="color:var(--red)">${euro(monthSpent)}</b>
+        ${budgetTotal ? `<span class="carry">Budget : ${euro(budgetTotal)}</span>` : ''}</div>
     </div>
-    <h2>Où part le liquide ce mois-ci</h2>
-    ${split || '<p class="empty">Aucune dépense en espèces ce mois-ci.</p>'}
-    <button type="button" class="secondary wide" id="c-subs" style="margin-top:8px">Sous-catégories « Espèces » (${c.subs.length}) ›</button>
+    <h2>Budgets et dépenses du mois</h2>
+    ${lines || '<p class="empty">Aucune dépense en espèces ce mois-ci.</p>'}
+    <div class="cash-btns">
+      <button type="button" class="secondary" id="c-budgets">🎯 Budgets espèces</button>
+      <button type="button" class="secondary" id="c-subs">Sous-catégories (${c.subs.length})</button>
+    </div>
     <h2>Historique</h2>
     <div class="list">${history || '<p class="empty">Rien pour l’instant. Ajoute un retrait ou une dépense en espèces.</p>'}</div>
-    <p class="note">Les dépenses en espèces ne s’ajoutent pas à ton mois : c’est le retrait qui y compte déjà.</p>`;
+    <p class="note">Les dépenses « En espèce » ne s’ajoutent pas à ton mois ni à ton solde : c’est le retrait qui y compte déjà.
+      Elles se saisissent aussi depuis « Ajouter » ou la commande vocale, catégorie « En espèce ».</p>`;
+  ensureCashSetup().then((done) => { if (done) refresh(true); }).catch((e) => alertCash(e.message));
 }
 
-function cashSpendSheet(op = null) {
+/** Budgets mensuels par sous-catégorie « En espèce » (propres au suivi des espèces, sans report). */
+function cashBudgetsSheet() {
   const c = cashData();
-  const subId = op ? op.sub || '' : (c.subs[0] && c.subs[0].id) || '';
   openSheet(`
-    <h3>${op ? 'Modifier la dépense en espèces' : 'Dépense en espèces'}</h3>
-    <label class="field" for="k-amount">Montant (€)</label>
-    <input class="input big" id="k-amount" inputmode="decimal" autocomplete="off" value="${op ? amountText(op.cents) : ''}">
-    <label class="field">Sous-catégorie</label>
-    <div class="segmented sub" id="k-sub">${c.subs.map((x) => `<button type="button" data-ksub="${esc(x.id)}" class="${x.id === subId ? 'on' : ''}">${esc(x.name)}</button>`).join('')}</div>
-    <label class="field" for="k-note">Description (facultatif)</label>
-    <input class="input" id="k-note" autocomplete="off" value="${op ? esc(op.note || '') : ''}">
-    <label class="field" for="k-date">Date</label>
-    <input class="input" id="k-date" type="date" value="${op ? op.date : todayIso()}">
+    <h3>Budgets espèces</h3>
+    <p class="hint">Combien dépenser en liquide chaque mois, par sous-catégorie. Laisse vide pour ne pas fixer de budget.</p>
+    ${c.subs.map((s) => `<label class="field" for="kb-${esc(s.id)}">${esc(s.name)}</label>
+      <input class="input" id="kb-${esc(s.id)}" data-kbudget="${esc(s.id)}" inputmode="decimal" autocomplete="off" value="${c.budgets[s.id] ? amountText(c.budgets[s.id]) : ''}">`).join('')}
     <p class="error-text"></p>
     <div class="actions">
-      ${op ? '<button type="button" class="secondary danger" id="k-delete">Supprimer</button>' : '<button type="button" class="secondary" data-close>Annuler</button>'}
+      <button type="button" class="secondary" data-close>Annuler</button>
       <button type="submit" class="primary">Enregistrer</button>
     </div>`, async (form) => {
-    const cents = parseAmount(form.querySelector('#k-amount').value);
-    if (cents <= 0) throw new Error('Saisis un montant positif valide.');
-    const date = form.querySelector('#k-date').value;
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new Error('Date invalide.');
-    const on = form.querySelector('[data-ksub].on');
     const fresh = cashData();
-    const entry = { id: op ? op.id : String(newId()), date, cents, kind: 'spend', sub: on ? on.dataset.ksub : '',
-                    note: form.querySelector('#k-note').value.trim() };
-    if (!fresh.start || date < fresh.start) fresh.start = fresh.start && fresh.start < date ? fresh.start : date;
-    fresh.ops = op ? fresh.ops.map((o) => (o.id === op.id ? entry : o)) : [...fresh.ops, entry];
+    const budgets = {};
+    for (const input of form.querySelectorAll('[data-kbudget]')) {
+      const text = input.value.trim();
+      if (!text) continue;
+      const cents = parseAmount(text);
+      if (cents < 0) throw new Error('Un budget ne peut pas être négatif.');
+      if (cents > 0) budgets[input.dataset.kbudget] = cents;
+    }
+    fresh.budgets = budgets;
     await saveCash(fresh);
   });
-  const form = $('#sheet-form');
-  form.querySelector('#k-sub').addEventListener('click', (e) => {
-    const b = e.target.closest('[data-ksub]'); if (!b) return;
-    form.querySelectorAll('[data-ksub]').forEach((x) => x.classList.toggle('on', x === b));
-  });
-  const del = form.querySelector('#k-delete');
-  if (del) del.addEventListener('click', () => deleteCashOp(op, form));
-  if (!op) setTimeout(() => form.querySelector('#k-amount').focus(), 50);
 }
 async function deleteCashOp(op, form) {
   if (!confirm('Supprimer cette ligne ?')) return;
@@ -2286,8 +2333,9 @@ function cashRecountSheet(op = null) {
       // Ce que Kompte calcule avec la nouvelle date de début, puis la correction pour tomber juste.
       const today = todayIso();
       const computed = cashRetraits(newStart, fresh.links).reduce((s, e) => s + e.amount, 0)
-        + fresh.ops.filter((o) => o.date >= newStart && o.date <= today).reduce((s, o) => s + (o.kind === 'adjust' ? o.cents : -o.cents), 0);
-      if (real !== computed) fresh.ops = [...fresh.ops, { id: String(newId()), date: today, cents: real - computed, kind: 'adjust', sub: '', note: '' }];
+        + fresh.ops.filter((o) => o.kind === 'adjust' && o.date >= newStart && o.date <= today).reduce((s, o) => s + o.cents, 0)
+        + cashMoves(newStart, addDays(today, 1)).reduce((s, e) => s + (e.row.kind === 'Revenu' ? e.amount : -e.amount), 0);
+      if (real !== computed) fresh.ops = [...fresh.ops, { id: String(newId()), date: today, cents: real - computed, kind: 'adjust' }];
     }
     await saveCash(fresh);
   });
@@ -2295,13 +2343,14 @@ function cashRecountSheet(op = null) {
   const del = form.querySelector('#k-delete');
   if (del) del.addEventListener('click', () => deleteCashOp(op, form));
 }
+/** Sous-catégories de la catégorie partagée « En espèce » (les mêmes que dans « Ajouter » et sur le PC). */
 function cashSubsSheet() {
   const c = cashData();
   const line = (x) => `<div class="sub-line"><input class="input" data-kname="${esc(x.id)}" value="${esc(x.name)}" autocomplete="off">
       <button type="button" class="icon-btn" data-kdel aria-label="Supprimer">✕</button></div>`;
   openSheet(`
-    <h3>Sous-catégories « Espèces »</h3>
-    <p class="hint">Pour classer ce que tu paies en liquide. Une dépense dont la sous-catégorie est supprimée reste, « sans sous-catégorie ».</p>
+    <h3>Sous-catégories « En espèce »</h3>
+    <p class="hint">Les mêmes que dans « Ajouter » (catégorie « En espèce »). Une dépense dont la sous-catégorie est supprimée reste, « sans sous-catégorie ».</p>
     <div id="k-subs">${c.subs.map(line).join('')}</div>
     <button type="button" class="secondary wide" id="k-add-sub" style="margin-top:8px">+ Ajouter une sous-catégorie</button>
     <p class="error-text"></p>
@@ -2312,9 +2361,10 @@ function cashSubsSheet() {
     const subs = [...form.querySelectorAll('[data-kname]')].map((i) => ({ id: i.dataset.kname, name: i.value.trim() })).filter((x) => x.name);
     const names = subs.map((x) => x.name.toLowerCase());
     if (new Set(names).size !== names.length) throw new Error('Deux sous-catégories ont le même nom.');
-    const fresh = cashData();
-    fresh.subs = subs;
-    await saveCash(fresh);
+    await ensureCashSetup();
+    const cat = cashCategory();
+    if (!cat) throw new Error('Catégorie « En espèce » introuvable.');
+    await saveCategories(categories().map((x) => (x.name === cat.name ? { ...x, subs } : x)));
   });
   const form = $('#sheet-form');
   form.querySelector('#k-subs').addEventListener('click', (e) => { const b = e.target.closest('[data-kdel]'); if (b) b.parentElement.remove(); });
@@ -2356,7 +2406,14 @@ function cashLinkSheet() {
 }
 /** Clics de l'onglet Espèces ; renvoie true si le clic est traité. */
 function cashClick(t) {
-  if (t.closest('#c-spend')) { cashSpendSheet(); return true; }
+  if (t.closest('#c-spend')) {
+    ensureCashSetup().then(() => {
+      const cat = cashCategory();
+      transactionSheet(null, { category: cat ? cat.name : CASH_CAT, heading: 'Dépense en espèces' });
+    }).catch((e) => alertCash(e.message));
+    return true;
+  }
+  if (t.closest('#c-budgets')) { cashBudgetsSheet(); return true; }
   if (t.closest('#c-recount')) { cashRecountSheet(); return true; }
   if (t.closest('#c-subs')) { cashSubsSheet(); return true; }
   if (t.closest('#c-link')) { cashLinkSheet(); return true; }
@@ -2374,7 +2431,7 @@ function cashClick(t) {
   const row = t.closest('[data-cash-op]');
   if (row) {
     const op = cashData().ops.find((o) => o.id === row.dataset.cashOp);
-    if (op) (op.kind === 'adjust' ? cashRecountSheet : cashSpendSheet)(op);
+    if (op) cashRecountSheet(op);
     return true;
   }
   return false;
@@ -2907,7 +2964,19 @@ function renderTransactions() {
       ${chosen.length ? '<button type="button" class="chip" id="cat-reset">Tout afficher</button>' : ''}
     </div>
     ${filterGrid}
-    <div class="list">${rows || `<p class="empty">${state.query || chosen.length ? 'Aucune opération trouvée.' : 'Aucune opération ce mois-ci.'}</p>`}</div>`;
+    <div class="list">${rows || `<p class="empty">${state.query || chosen.length ? 'Aucune opération trouvée.' : 'Aucune opération ce mois-ci.'}</p>`}</div>
+    ${cashRowsOfMonth(ym)}`;
+}
+/** Dépenses « En espèce » du mois, hors totaux (le retrait y compte déjà). */
+function cashRowsOfMonth(ym) {
+  const list = occurrences(...monthPeriod(ym), true).filter((e) => isCashCat(e.row.category));
+  if (!list.length) return '';
+  return `<h2>Payé en espèces <small class="muted-s">(hors solde)</small></h2><div class="list">${list.map((e) => {
+    const plus = e.row.kind === 'Revenu', sub = subOf(e.row);
+    return `<button type="button" class="row cash-row" data-item="${e.row.id}" data-due="${e.due}">${catIcon(e.row.category)}
+      <span class="body"><span class="title">${esc(e.row.title)}</span><span class="sub">${sub ? esc(sub.name) : 'En espèce'} · ${frDate(e.due)}</span></span>
+      <span class="amount ${plus ? 'plus' : 'minus'}">${plus ? '+' : '−'}${euro(e.amount)}</span></button>`;
+  }).join('')}</div>`;
 }
 
 /** Montants fixes : toucher une ligne pour la modifier, changer un seul mois, l'arrêter ou la supprimer. */
