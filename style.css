@@ -452,7 +452,7 @@ textarea.input { resize: vertical; font: inherit; font-size: 16px; line-height: 
 @keyframes k-peek { 0%, 70%, 100% { transform: translateX(0); } 80%, 90% { transform: translateX(8px) rotate(8deg); } }
 @keyframes k-float { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-14px); } }
 @keyframes k-snow { from { transform: translate(0, 0); } to { transform: translate(24px, 110vh); } }
-@media (prefers-reduced-motion: reduce) { .deco *, .scene * { animation: none !important; } .flake { display: none; } }
+@media (prefers-reduced-motion: reduce) { .deco *, .scene * { animation: none !important; } .flake, .drop { display: none; } }
 
 /* Bleu océan : bleu marine profond, turquoise */
 :root[data-theme="ocean"] {
@@ -524,3 +524,30 @@ textarea.input { resize: vertical; font: inherit; font-size: 16px; line-height: 
 :root[data-theme="cyber"] .tabs { border-top: 1px solid rgba(255, 43, 214, .45); }
 :root[data-theme="cyber"] .tabs button.active { color: var(--blue); box-shadow: inset 0 2px 0 var(--blue); text-shadow: 0 0 6px rgba(0, 240, 255, .7); }
 :root[data-theme="cyber"] .theme-card.on { box-shadow: 0 0 12px rgba(255, 43, 214, .5); }
+
+/* Halloween : du sang qui coule sous l'en-tête, sur la case du solde, et des gouttes qui tombent */
+:root[data-theme="halloween"] .top::after { content: ''; position: absolute; left: 0; right: 0; top: 100%; height: 34px;
+  background: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 120 34'><rect width='120' height='6' fill='%23a3001b'/><path d='M6 5v13a3 3 0 0 0 6 0V5zM30 5v6a2.5 2.5 0 0 0 5 0V5zM52 5v22a3.5 3.5 0 0 0 7 0V5zM80 5v10a3 3 0 0 0 6 0V5zM101 5v17a2.5 2.5 0 0 0 5 0V5z' fill='%23a3001b'/><path d='M3 6q6 4 12 0M27 6q5 3 10 0M49 6q7 4 13 0M77 6q6 4 12 0M98 6q6 4 11 0' fill='%23a3001b'/><path d='M8 7v8M54 7v16' stroke='%23ff4d5e' stroke-width='1' stroke-linecap='round' opacity='.6'/></svg>") repeat-x 0 0 / 120px 34px; pointer-events: none; filter: drop-shadow(0 2px 2px rgba(0,0,0,.4)); }
+:root[data-theme="halloween"] .hero::before { content: ''; position: absolute; left: 0; right: 0; top: 0; height: 26px;
+  background: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 120 34'><rect width='120' height='6' fill='%23a3001b'/><path d='M6 5v13a3 3 0 0 0 6 0V5zM30 5v6a2.5 2.5 0 0 0 5 0V5zM52 5v22a3.5 3.5 0 0 0 7 0V5zM80 5v10a3 3 0 0 0 6 0V5zM101 5v17a2.5 2.5 0 0 0 5 0V5z' fill='%23a3001b'/><path d='M3 6q6 4 12 0M27 6q5 3 10 0M49 6q7 4 13 0M77 6q6 4 12 0M98 6q6 4 11 0' fill='%23a3001b'/><path d='M8 7v8M54 7v16' stroke='%23ff4d5e' stroke-width='1' stroke-linecap='round' opacity='.6'/></svg>") repeat-x 30px 0 / 92px 26px; pointer-events: none; opacity: .9; }
+:root[data-theme="halloween"] .hero small { position: relative; top: 8px; }
+:root[data-theme="halloween"] .hero strong { margin-top: 10px; }
+.drop { position: absolute; top: 76px; width: 5px; height: 8px; border-radius: 50% 50% 50% 50% / 35% 35% 65% 65%;
+  background: #b0001e; opacity: 0; animation: k-drop 5s ease-in infinite; }
+@keyframes k-drop { 0% { transform: translateY(0) scaleY(.4); opacity: 0; } 15% { opacity: 1; transform: translateY(0) scaleY(1.4); }
+  100% { transform: translateY(70vh) scaleY(1.8); opacity: 0; } }
+
+/* Noël : de la neige sous l'en-tête, posée sur les cases, et des flocons plus visibles */
+:root[data-theme="noel"] .top::after { content: ''; position: absolute; left: 0; right: 0; top: 100%; height: 12px;
+  background: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 12'><path d='M0 0H40V5Q35 12 30 6Q25 1 20 7Q15 12 10 6Q5 1 0 5Z' fill='white'/></svg>") repeat-x 0 0 / 40px 12px; pointer-events: none; filter: drop-shadow(0 2px 2px rgba(0,0,0,.25)); }
+:root[data-theme="noel"] .hero::before,
+:root[data-theme="noel"] .tile::before,
+:root[data-theme="noel"] .metric::before { content: ''; position: absolute; left: 0; right: 0; top: 0; height: 12px;
+  background: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 60 14'><path d='M0 0H60V6Q56 13 51 7Q47 3 43 8Q38 14 33 7Q28 2 23 8Q18 13 13 7Q8 2 4 8Q2 10 0 8Z' fill='white'/><circle cx='20' cy='11' r='1.4' fill='white'/><circle cx='47' cy='10' r='1.2' fill='white'/></svg>") repeat-x 0 0 / 60px 12px; pointer-events: none; }
+:root[data-theme="noel"] .tile,
+:root[data-theme="noel"] .metric { position: relative; overflow: hidden; }
+:root[data-theme="noel"] .hero { border-top-color: #fff; }
+:root[data-theme="noel"] .primary { box-shadow: inset 0 3px 0 rgba(255,255,255,.9); }
+:root[data-theme="noel"] .flake { opacity: .75; text-shadow: 0 0 4px rgba(255,255,255,.6); }
+:root[data-theme="noel"] body { background: radial-gradient(ellipse 120% 60px at 50% 100%, rgba(255,255,255,.18), transparent) fixed no-repeat,
+  linear-gradient(180deg, #0f3d2a 0, #0c2a1d 300px) no-repeat, #0c2a1d; }

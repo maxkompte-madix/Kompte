@@ -1,7 +1,7 @@
 // Service worker : l'appli s'ouvre instantanément (fichiers en cache) et se met à jour
 // en arrière-plan. Les données, elles, viennent toujours de Supabase.
-const CACHE = 'kompte-v57';
-const SHELL = ['./', 'index.html', 'style.css?v=57', 'app.js?v=57', 'manifest.webmanifest', 'icons/app-192.png',
+const CACHE = 'kompte-v58';
+const SHELL = ['./', 'index.html', 'style.css?v=58', 'app.js?v=58', 'manifest.webmanifest', 'icons/app-192.png',
   'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js'];
 
 self.addEventListener('install', (event) => {

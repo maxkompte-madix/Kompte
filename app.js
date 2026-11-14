@@ -106,11 +106,12 @@ const SVG = {
 };
 const DECO = {
   halloween: () => `
+    ${[8, 26, 47, 71, 88].map((x, i) => `<i class="drop" style="left:${x}%;animation-delay:-${i * 1.3}s;animation-duration:${4 + i % 3}s"></i>`).join('')}
     <span class="d-spider">${SVG.spider}</span>
     <span class="d-bat b1">${SVG.bat}</span><span class="d-bat b2">${SVG.bat}</span><span class="d-bat b3">${SVG.bat}</span>
     <span class="d-ghost">${SVG.ghost}</span>`,
   noel: () => `
-    ${Array.from({ length: 18 }, (_, i) => `<i class="flake" style="left:${(i * 37) % 100}%;animation-delay:-${(i * 1.7) % 12}s;`
+    ${Array.from({ length: 30 }, (_, i) => `<i class="flake" style="left:${(i * 37) % 100}%;animation-delay:-${(i * 1.7) % 12}s;`
       + `animation-duration:${9 + (i % 5) * 2}s;font-size:${10 + (i % 4) * 4}px">❄</i>`).join('')}
     <span class="d-holly">${SVG.holly}</span>
     <span class="d-snowman">${SVG.snowman}</span>`,
