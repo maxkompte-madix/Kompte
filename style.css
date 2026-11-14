@@ -309,6 +309,8 @@ textarea.input { resize: vertical; font: inherit; font-size: 16px; line-height: 
 .sw-ocean { background: linear-gradient(135deg, #0a2540 0 45%, #1478c8 45% 68%, #3fd0e8 68% 86%, #e9fbff 86%); }
 .sw-tropical { background: linear-gradient(135deg, #e8fbef 0 35%, #18a35e 35% 60%, #ffb02e 60% 80%, #ff6b5a 80%); }
 .sw-cyber { background: linear-gradient(135deg, #07060f 0 45%, #ff2bd6 45% 65%, #00f0ff 65% 85%, #f5ff3b 85%); }
+.sw-season { background: linear-gradient(135deg, #ff7a1a 0 22%, #1f8a4c 22% 42%, #ff3d7f 42% 60%, #ffe14d 60% 78%, #1478c8 78%); }
+.theme-card small { display: block; font-weight: 400; font-size: 11px; color: var(--muted); margin-top: 2px; }
 .sw-noel { background: linear-gradient(135deg, #0f3d2a 0 45%, #e23b3b 45% 68%, #ffd23f 68% 84%, #ffffff 84%); }
 
 /* ------------------------------------------------- thème « Rose & argent » */
@@ -452,7 +454,7 @@ textarea.input { resize: vertical; font: inherit; font-size: 16px; line-height: 
 @keyframes k-peek { 0%, 70%, 100% { transform: translateX(0); } 80%, 90% { transform: translateX(8px) rotate(8deg); } }
 @keyframes k-float { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-14px); } }
 @keyframes k-snow { from { transform: translate(0, 0); } to { transform: translate(24px, 110vh); } }
-@media (prefers-reduced-motion: reduce) { .deco *, .scene * { animation: none !important; } .flake, .drop, .bubble, .scan { display: none; } }
+@media (prefers-reduced-motion: reduce) { .deco *, .scene * { animation: none !important; } .flake, .drop, .bubble, .scan, .d-heart, .d-fw { display: none; } }
 
 /* Bleu océan : bleu marine profond, turquoise */
 :root[data-theme="ocean"] {
@@ -614,3 +616,24 @@ textarea.input { resize: vertical; font: inherit; font-size: 16px; line-height: 
 @keyframes k-holo { 0%, 100% { opacity: .9; } 47% { opacity: .35; transform: translateX(2px); } 49% { opacity: .9; transform: none; } 51% { opacity: .5; } }
 .scene .spin svg { animation: k-spin 6s linear infinite; }
 @keyframes k-spin { 0% { transform: scaleX(1); } 50% { transform: scaleX(-1); } 100% { transform: scaleX(1); } }
+
+/* Saison › Saint-Valentin : cœurs qui montent */
+.d-heart { bottom: -40px; opacity: .8; animation: k-rise linear infinite; }
+@keyframes k-rise { 0% { transform: translate(0, 0) rotate(-8deg); opacity: 0; } 10% { opacity: .85; }
+  50% { transform: translate(14px, -55vh) rotate(8deg); } 100% { transform: translate(-8px, -115vh) rotate(-8deg); opacity: 0; } }
+.scene .beat { animation: k-beat 1.2s ease-in-out infinite; }
+@keyframes k-beat { 0%, 100% { transform: scale(1); } 15% { transform: scale(1.2); } 30% { transform: scale(1); } 45% { transform: scale(1.12); } }
+
+/* Saison › Pâques : lapin qui passe la tête, poussin qui sautille, papillons */
+.d-bunny { width: 38px; left: -14px; top: 46%; transform-origin: bottom center; animation: k-peek 6s ease-in-out infinite; }
+.d-hop { width: 34px; left: 0; bottom: calc(64px + var(--safe-bottom)); animation: k-hopx 20s linear infinite; }
+.d-hop svg { animation: k-hop .6s ease-in-out infinite alternate; }
+@keyframes k-hopx { from { transform: translateX(-50px); } to { transform: translateX(calc(100vw + 10px)); } }
+@keyframes k-hop { from { transform: translateY(0); } to { transform: translateY(-12px); } }
+
+/* Saison › Nouvel An (palette Cyberpunk) : feux d'artifice */
+.d-fw { width: 70px; opacity: 0; animation: k-burst 4.5s ease-out infinite; }
+.d-fw.w1 { left: 8%; top: 14%; }
+.d-fw.w2 { right: 6%; top: 34%; width: 54px; animation-delay: -1.6s; }
+.d-fw.w3 { left: 40%; top: 66%; width: 60px; animation-delay: -3s; animation-duration: 5.5s; }
+@keyframes k-burst { 0% { transform: scale(.1); opacity: 0; } 8% { opacity: 1; } 35% { transform: scale(1); opacity: .9; } 55%, 100% { transform: scale(1.15); opacity: 0; } }

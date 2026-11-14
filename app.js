@@ -61,14 +61,40 @@ function setPref(key, value) {
   try { localStorage.setItem('kompte-prefs', JSON.stringify({ ...prefs(), [key]: value })); } catch (e) { /* navigation privée */ }
 }
 const THEME_BAR = { dark: '#0b0b0d', rose: '#ffe3f0', halloween: '#1a0f24', noel: '#0f3d2a', ocean: '#0a2540', tropical: '#e8fbef', cyber: '#07060f' };
-function applyTheme() {
-  const theme = prefs().theme;
-  document.documentElement.dataset.theme = theme;
-  const meta = document.querySelector('meta[name=theme-color]');
-  if (meta) meta.content = THEME_BAR[theme] || THEME_BAR.dark;
-  const deco = $('#deco');
-  if (deco) deco.innerHTML = DECO[theme] ? DECO[theme]() : '';
+/** Thème « Saison » : change tout seul selon le mois (couleurs = palette, dessins = deco). Index 0 = janvier. */
+const SEASONS = [
+  { palette: 'cyber', deco: 'cyber', label: 'Nouvel An néon ⚡' },
+  { palette: 'rose', deco: 'valentin', label: 'Saint-Valentin 💘' },
+  { palette: 'tropical', deco: 'paques', label: 'Pâques &amp; printemps 🐣' },
+  { palette: 'tropical', deco: 'paques', label: 'Pâques &amp; printemps 🐣' },
+  { palette: 'tropical', deco: 'tropical', label: 'Tropical 🌴' },
+  { palette: 'tropical', deco: 'tropical', label: 'Tropical 🌴' },
+  { palette: 'ocean', deco: 'ocean', label: 'Vacances à la mer 🌊' },
+  { palette: 'ocean', deco: 'ocean', label: 'Vacances à la mer 🌊' },
+  { palette: 'tropical', deco: 'tropical', label: 'Été indien 🌴' },
+  { palette: 'halloween', deco: 'halloween', label: 'Halloween 🎃' },
+  { palette: 'noel', deco: 'noel', label: 'Noël 🎄' },
+  { palette: 'noel', deco: 'noel', label: 'Noël 🎄' },
+];
+/** Thème choisi : « Sombre » et « Rose & argent » sont fixes ; tout le reste (anciens thèmes compris) = Saison. */
+function themeChoice() { const t = prefs().theme; return t === 'dark' || t === 'rose' ? t : 'season'; }
+function look() {
+  const t = themeChoice();
+  return t === 'season' ? SEASONS[new Date().getMonth()] : { palette: t, deco: null, label: '' };
 }
+function applyTheme() {
+  const l = look();
+  document.documentElement.dataset.theme = l.palette;
+  const meta = document.querySelector('meta[name=theme-color]');
+  if (meta) meta.content = THEME_BAR[l.palette] || THEME_BAR.dark;
+  const deco = $('#deco');
+  if (deco) {
+    deco.dataset.deco = l.deco || '';
+    deco.innerHTML = DECO[l.deco] ? DECO[l.deco]() : '';
+  }
+}
+// Le mois change pendant que l'appli reste ouverte : le décor suit.
+setInterval(() => { const d = $('#deco'); if (d && (d.dataset.deco || '') !== (look().deco || '')) { applyTheme(); if (state.all) render(); } }, 60000);
 
 // ------------------------------------------- thèmes de fête : petits dessins
 // Dessins maison en SVG, posés par-dessus la page mais jamais cliquables (pointer-events: none).
@@ -159,6 +185,30 @@ const SVG = {
   drone: `<svg viewBox="0 0 60 40"><path d="M6 8h18M36 8h18" stroke="#00f0ff" stroke-width="2"/><path d="M15 8v6M45 8v6" stroke="#9a96c4" stroke-width="2"/>
     <rect x="12" y="14" width="36" height="12" rx="6" fill="#1d1940" stroke="#ff2bd6" stroke-width="1.5"/><circle cx="30" cy="20" r="3.5" fill="#ff2bd6"/>
     <path d="M24 26l-6 12h24l-6-12" fill="rgba(0,240,255,.18)"/></svg>`,
+
+  // Saint-Valentin et Pâques
+  heart: `<svg viewBox="0 0 40 36"><path d="M20 34C4 22 0 14 4 7c4-7 13-6 16 1 3-7 12-8 16-1 4 7 0 15-16 27z" fill="#ff3d7f"/>
+    <path d="M9 9q2-3 6-2" stroke="#fff" stroke-width="2.4" fill="none" stroke-linecap="round" opacity=".7"/></svg>`,
+  letter: `<svg viewBox="0 0 60 42"><rect x="2" y="4" width="56" height="36" rx="4" fill="#fff" stroke="#f2c4dc" stroke-width="2"/>
+    <path d="M4 6l26 20L56 6" stroke="#f2a6cb" stroke-width="2.4" fill="none"/>
+    <path d="M30 34c-8-6-10-10-8-13 2-3 6-3 8 0 2-3 6-3 8 0 2 3 0 7-8 13z" fill="#e5428e"/></svg>`,
+  egg: `<svg viewBox="0 0 40 50"><ellipse cx="20" cy="28" rx="17" ry="21" fill="#ffd1e6"/>
+    <path d="M4 24q8-6 16 0t16 0" stroke="#9b7bff" stroke-width="4" fill="none"/><path d="M4 36q8 6 16 0t16 0" stroke="#4fc3f7" stroke-width="4" fill="none"/>
+    <circle cx="12" cy="30" r="2" fill="#ffb02e"/><circle cx="20" cy="30" r="2" fill="#ffb02e"/><circle cx="28" cy="30" r="2" fill="#ffb02e"/></svg>`,
+  egg2: `<svg viewBox="0 0 40 50"><ellipse cx="20" cy="28" rx="17" ry="21" fill="#c8f0d2"/>
+    <path d="M5 22l5 5 5-5 5 5 5-5 5 5 5-5" stroke="#ff6b5a" stroke-width="3" fill="none"/><circle cx="14" cy="36" r="3" fill="#ffd23f"/><circle cx="27" cy="38" r="3" fill="#9b7bff"/></svg>`,
+  chick: `<svg viewBox="0 0 50 50"><path d="M6 30l10-4-6 10z" fill="#ffd23f"/><circle cx="26" cy="30" r="16" fill="#ffe14d"/><circle cx="31" cy="18" r="10" fill="#ffe14d"/>
+    <path d="M24 8q2-6 6-4-2 1-1 5" fill="#ffe14d"/><circle cx="34" cy="16" r="2" fill="#222"/><path d="M40 19l7 2-7 2z" fill="#ff8a1e"/>
+    <path d="M14 46h28" stroke="#9fcf6b" stroke-width="3"/><path d="M14 32q8-6 14 2-8 4-14-2z" fill="#ffd23f"/>
+    <path d="M10 44q10-12 30 0" stroke="#fff" stroke-width="3" fill="none"/><path d="M8 42l4-6 4 6 4-6 4 6 4-6 4 6 4-6 4 6" stroke="#fff" fill="#fff8e7" stroke-width="1"/></svg>`,
+  bunny: `<svg viewBox="0 0 50 80"><ellipse cx="17" cy="20" rx="6" ry="18" fill="#f3f0f5"/><ellipse cx="33" cy="20" rx="6" ry="18" fill="#f3f0f5"/>
+    <ellipse cx="17" cy="20" rx="3" ry="13" fill="#ffc4dd"/><ellipse cx="33" cy="20" rx="3" ry="13" fill="#ffc4dd"/>
+    <circle cx="25" cy="50" r="18" fill="#f3f0f5"/><circle cx="19" cy="46" r="2.4" fill="#222"/><circle cx="31" cy="46" r="2.4" fill="#222"/>
+    <ellipse cx="25" cy="53" rx="3" ry="2" fill="#ff8fb8"/><path d="M25 55v3M21 60q4 3 8 0" stroke="#444" stroke-width="1.4" fill="none"/>
+    <circle cx="14" cy="54" r="3" fill="#ffc4dd" opacity=".6"/><circle cx="36" cy="54" r="3" fill="#ffc4dd" opacity=".6"/></svg>`,
+  firework: `<svg viewBox="0 0 60 60"><g stroke-width="2.4" stroke-linecap="round">
+    <path d="M30 30L30 4M30 30L30 56M30 30L4 30M30 30L56 30M30 30L12 12M30 30L48 48M30 30L48 12M30 30L12 48" stroke="#ff2bd6"/>
+    <path d="M30 30L22 6M30 30L38 54M30 30L6 38M30 30L54 22" stroke="#00f0ff"/></g><circle cx="30" cy="30" r="3" fill="#f5ff3b"/></svg>`,
 };
 const DECO = {
   halloween: () => `
@@ -184,7 +234,15 @@ const DECO = {
   cyber: () => `
     <i class="scan"></i>
     <span class="d-bolt z1">${SVG.bolt}</span><span class="d-bolt z2">${SVG.boltc}</span><span class="d-bolt z3">${SVG.bolt}</span>
-    <span class="d-drone">${SVG.drone}</span>`,
+    <span class="d-drone">${SVG.drone}</span>
+    <span class="d-fw w1">${SVG.firework}</span><span class="d-fw w2">${SVG.firework}</span><span class="d-fw w3">${SVG.firework}</span>`,
+  valentin: () => `
+    ${Array.from({ length: 12 }, (_, i) => `<span class="d-heart" style="left:${(i * 31 + 7) % 100}%;animation-delay:-${(i * 2.1) % 13}s;`
+      + `animation-duration:${10 + (i % 4) * 2}s;width:${12 + (i % 3) * 7}px">${SVG.heart}</span>`).join('')}`,
+  paques: () => `
+    <span class="d-bunny">${SVG.bunny}</span>
+    <span class="d-butterfly b1">${SVG.butterfly}</span><span class="d-butterfly b2">${SVG.butterfly}</span>
+    <span class="d-hop">${SVG.chick}</span>`,
 };
 /** Petite scène dessinée à droite du « Bonjour » de l'accueil (dans la page : ne cache jamais rien). */
 const SCENE = {
@@ -193,6 +251,8 @@ const SCENE = {
   ocean: () => `<span class="scene"><span class="s-big float">${SVG.whale}</span><span class="s-small wobble">${SVG.octopus}</span></span>`,
   tropical: () => `<span class="scene"><span class="s-big">${SVG.palm}</span><span class="s-small wobble">${SVG.toucan}</span></span>`,
   cyber: () => `<span class="scene"><span class="s-big holo spin">${SVG.globe}</span><span class="s-small holo">${SVG.holocat}</span></span>`,
+  valentin: () => `<span class="scene"><span class="s-big wobble">${SVG.letter}</span><span class="s-small beat">${SVG.heart}</span></span>`,
+  paques: () => `<span class="scene"><span class="s-small wobble">${SVG.egg}</span><span class="s-big">${SVG.chick}</span><span class="s-small float">${SVG.egg2}</span></span>`,
 };
 /** Petites blagues de l'accueil, selon le thème (une au hasard à chaque affichage). */
 const JOKES = {
@@ -212,10 +272,42 @@ const JOKES = {
     'Le bonhomme de neige fond, ton épargne ne devrait pas ⛄',
     'Ho ho ho… oh non, les cadeaux sont débités.',
   ],
+  cyber: [
+    'Bonne résolution n°1 : regarder son solde AVANT de payer ⚡',
+    'Nouvelle année, nouveau budget… même carte bancaire.',
+    'Mise à jour du système : épargne passée en mode turbo 🤖',
+    'Les soldes de janvier ne sont pas une raison. Enfin presque.',
+  ],
+  valentin: [
+    'L’amour n’a pas de prix. Le resto du 14, si 💘',
+    'Cupidon vise le cœur, ta banque vise le découvert.',
+    'Un bon couple, c’est comme un bon budget : on fait les comptes à deux.',
+    'Roses : 40 €. Son sourire : inestimable. Ton solde : à vérifier.',
+  ],
+  paques: [
+    'Ne mets pas tous tes œufs dans le même panier… ni tout ton salaire dans le chocolat 🍫',
+    'Les cloches passent, les prélèvements aussi 🔔',
+    'La chasse aux œufs est plus facile que la chasse aux économies 🐣',
+    'Le lapin de Pâques ne rembourse pas les chocolats.',
+  ],
+  tropical: [
+    'Cocktail en terrasse : 12 €. Le regard du toucan : désapprobateur 🦜',
+    'Même le singe garde une banane de côté. Et toi ? 🐒',
+    'Ton budget bronze tranquille. Ne le laisse pas cramer ☀️',
+  ],
+  ocean: [
+    'Ton budget vacances nage encore… pour l’instant 🐠',
+    'La mer est salée, l’addition du resto de plage aussi.',
+    'Garde la tête hors de l’eau : vérifie ton solde avant la glace à 6 € 🍦',
+  ],
 };
 function themeHello(theme, evening) {
   if (theme === 'halloween') return evening ? 'Bouhsoir' : 'Bouhjour';
   if (theme === 'noel') return 'Ho ho ho';
+  if (theme === 'valentin') return evening ? 'Bonsoir mon cœur' : 'Bonjour mon cœur';
+  if (theme === 'cyber' && new Date().getMonth() === 0) return 'Bonne année';
+  if (theme === 'ocean') return 'Ahoy';
+  if (theme === 'tropical') return 'Aloha';
   return evening ? 'Bonsoir' : 'Bonjour';
 }
 
@@ -1838,7 +1930,7 @@ function renderMenu() {
   const balance = getBalance();
   const free = balance === null ? null : availableMoney(balance);
   const hour = new Date().getHours();
-  const theme = prefs().theme;
+  const theme = look().deco;
   const hello = themeHello(theme, hour >= 18 || hour < 5);
   const jokes = JOKES[theme];
   const joke = jokes ? `<p class="joke">${esc(jokes[Math.floor(Math.random() * jokes.length)])}</p>` : '';
@@ -2747,12 +2839,16 @@ function renderAccount() {
 
 function phoneSettings() {
   const p = prefs();
-  const theme = (id, label) => `<button type="button" class="theme-card ${p.theme === id ? 'on' : ''}" data-theme-pick="${id}">
+  const choice = themeChoice();
+  const theme = (id, label) => `<button type="button" class="theme-card ${choice === id ? 'on' : ''}" data-theme-pick="${id}">
       <span class="sw sw-${id}"></span>${label}</button>`;
+  const now = SEASONS[new Date().getMonth()];
   return `
     <h2>Sur ce téléphone</h2>
     <label class="field">Couleurs</label>
-    <div class="themes">${theme('dark', 'Sombre')}${theme('rose', 'Rose &amp; argent')}${theme('halloween', 'Halloween 🎃')}${theme('noel', 'Noël 🎄')}${theme('ocean', 'Bleu océan 🌊')}${theme('tropical', 'Vert tropical 🌴')}${theme('cyber', 'Cyberpunk ⚡')}</div>
+    <div class="themes">${theme('dark', 'Sombre')}${theme('rose', 'Rose &amp; argent')}${theme('season', `Saison<small>${now.label}</small>`)}</div>
+    <p class="hint">« Saison » change tout seul : janvier Nouvel An, février Saint-Valentin, mars–avril Pâques,
+      mai–juin Tropical, juillet–août Vacances à la mer, septembre Été indien, octobre Halloween, novembre–décembre Noël.</p>
     <label class="field" for="start-page">À l’ouverture d’un compte</label>
     <select class="input" id="start-page">
       <option value="menu" ${p.start === 'menu' ? 'selected' : ''}>Afficher l’accueil (les tuiles)</option>
