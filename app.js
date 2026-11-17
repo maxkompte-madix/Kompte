@@ -43,6 +43,7 @@ const state = {
   query: '',
   cats: [],         // catégories choisies dans le filtre des transactions
   catsOpen: false,
+  cardOnly: false,  // Opérations : seulement les achats de la carte à débit différé, par relevé
   loading: false,
   syncError: false,
   email: '',
@@ -458,7 +459,7 @@ const PAGES = {
   fixed: { label: 'Montants fixes', help: 'Ce qui revient chaque mois (salaire, loyer, abonnements…). Touche une ligne pour la modifier, changer un seul mois ou l’arrêter.' },
   savings: { label: 'Épargne', help: 'Tes comptes d’épargne. « + Verser » ou « − Retirer » pour bouger de l’argent ; les poches le répartissent par projet.' },
   cash: { label: 'Suivi des espèces', help: 'Un retrait = une dépense « Retrait » (comptée dans ton mois). Ce que tu paies en liquide = catégorie « En espèce » : hors solde, ça baisse seulement ton porte-monnaie.' },
-  check: { label: 'Vérifier', help: 'Télécharge le relevé sur le site de ta banque (OFX, CSV ou QIF) et choisis-le ici : Kompte montre ce qui manque. Rien n’est enregistré.' },
+  check: { label: 'Vérifier', help: 'Recopie le solde de ta banque (et l’en-cours de la carte) pour savoir où en sera le compte à la fin du mois. Ou importe les relevés (compte et carte, OFX, CSV ou QIF) : Kompte montre ce qui manque. Rien n’est enregistré.' },
   account: { label: 'Réglages', help: 'Les choix « Sur ce téléphone » ne changent que ce téléphone ; les autres sont partagés avec le PC.' },
 };
 const view = $('#view');
@@ -1439,7 +1440,7 @@ async function saveFile(file) {
 // ------------------------------------------------- vérification avec la banque
 // Lecture d'un relevé téléchargé sur le site de la banque (OFX, QIF ou CSV), puis rapprochement automatique
 // avec les opérations de Kompte : même montant, dates à 4 jours près. Rien n'est enregistré par l'import.
-const checkState = { file: null, ops: null, balance: null, error: '' };
+const checkState = { compte: null, files: [], error: '', bank: '', card: '' };
 
 /** Texte d'un fichier : UTF-8, sinon Windows-1252 (cas courant des banques françaises). */
 async function readBankFile(file) {
@@ -1484,7 +1485,7 @@ function parseOfx(text) {
     const cents = bankCents(tag(ledger, 'BALAMT')), date = bankDate(tag(ledger, 'DTASOF'));
     if (cents !== null) balance = { cents, date };
   }
-  return { ops, balance };
+  return { ops, balance, card: /<CCSTMTRS>|<CCACCTFROM>/i.test(text) };
 }
 function parseQif(text) {
   const ops = [];
@@ -1544,9 +1545,15 @@ function parseCsv(text) {
   return { ops, balance: null };
 }
 function parseBankFile(text) {
-  if (/<OFX>|<STMTTRN>/i.test(text)) return parseOfx(text);
-  if (/^!Type:/im.test(text)) return parseQif(text);
-  return parseCsv(text);
+  let parsed;
+  if (/<OFX>|<STMTTRN>/i.test(text)) parsed = parseOfx(text);
+  else if (/^!Type:/im.test(text)) parsed = { ...parseQif(text), card: /^!Type:\s*CCard/im.test(text) };
+  else parsed = parseCsv(text);
+  parsed.card = !!parsed.card;
+  // Sans balise explicite : un relevé dont presque toutes les lignes sont des paiements carte est celui de la carte.
+  const cardLike = parsed.ops.filter((o) => /\b(CB|CARTE|PAIEMENT PAR CARTE)\b/i.test(o.label)).length;
+  if (!parsed.card && parsed.ops.length >= 3 && cardLike >= 0.9 * parsed.ops.length) parsed.card = true;
+  return parsed;
 }
 
 /** Solde attendu par Kompte à la fin d'un jour donné (ce qui a déjà touché le compte). */
@@ -1559,35 +1566,97 @@ function balanceAt(day) {
   for (const e of balanceEvents(addDays(day, 1), addDays(today, 1))) after += signed(e);
   return now - after;
 }
-/** Rapproche le relevé et Kompte. Les achats carte d'un même prélèvement forment une seule ligne, comme à la banque. */
-function matchBank(ops) {
-  const dates = ops.map((o) => o.date).sort();
-  const from = dates[0], to = dates[dates.length - 1];
-  const lines = [], cards = {};
-  for (const e of balanceEvents(addDays(from, -5), addDays(to, 6))) {
-    const debit = debitDate(e.row, e.due);
-    if (isCard(e.row)) {
-      const c = cards[debit] = cards[debit] || { date: debit, cents: 0, label: `Relevé carte du ${frDate(debit)}`, card: true };
-      c.cents += signed(e);
-    } else {
-      lines.push({ date: debit, cents: signed(e), label: e.row.title, row: e.row });
-    }
-  }
-  lines.push(...Object.values(cards));
-  const free = new Set(lines.map((_, i) => i));
+/** Associe chaque opération du relevé à une ligne de Kompte : même montant, dates à 4 jours près (la plus proche).
+    Les lignes de secours (spare) ne servent que si aucune ligne principale ne convient (= _pair du PC). */
+function pairBank(ops, lines, spare = []) {
   const dayDiff = (a, b) => Math.abs((Date.parse(a) - Date.parse(b)) / 86400000);
-  const matched = [], bankOnly = [];
-  for (const op of [...ops].sort((a, b) => (a.date < b.date ? -1 : 1))) {
+  const closest = (pool, free, op) => {
     let best = -1;
     for (const i of free) {
-      if (lines[i].cents !== op.cents || dayDiff(lines[i].date, op.date) > 4) continue;
-      if (best < 0 || dayDiff(lines[i].date, op.date) < dayDiff(lines[best].date, op.date)) best = i;
+      if (pool[i].cents !== op.cents || dayDiff(pool[i].date, op.date) > 4) continue;
+      if (best < 0 || dayDiff(pool[i].date, op.date) < dayDiff(pool[best].date, op.date)) best = i;
     }
-    if (best >= 0) { free.delete(best); matched.push({ bank: op, kompte: lines[best] }); } else bankOnly.push(op);
+    return best;
+  };
+  const free = new Set(lines.map((_, i) => i)), freeSpare = new Set(spare.map((_, i) => i));
+  const matched = [], rescued = [], bankOnly = [];
+  for (const op of [...ops].sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0))) {
+    let best = closest(lines, free, op);
+    if (best >= 0) { free.delete(best); matched.push({ bank: op, kompte: lines[best] }); continue; }
+    best = closest(spare, freeSpare, op);
+    if (best >= 0) { freeSpare.delete(best); rescued.push({ bank: op, kompte: spare[best] }); } else bankOnly.push(op);
   }
-  const kompteOnly = [...free].map((i) => lines[i]).filter((l) => l.date >= from && l.date <= to)
-    .sort((a, b) => (a.date < b.date ? -1 : 1));
-  return { from, to, matched, bankOnly, kompteOnly };
+  return { matched, rescued, bankOnly, free };
+}
+const byBankDate = (a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0);
+/** Rapproche les relevés et Kompte (= match_bank du PC). Relevé du compte : les achats carte d'un même prélèvement
+    forment une seule ligne, comme à la banque. Relevé de la carte à débit différé : achat par achat, à la date de l'achat ;
+    une dépense non cochée « carte » peut y être retrouvée (unmarked). */
+function matchBank(ops, cardOps = []) {
+  const result = { account: null, card: null };
+  let paidByCard = new Set();
+  if (cardOps.length) {
+    const dates = cardOps.map((o) => o.date).sort();
+    const from = dates[0], to = dates[dates.length - 1];
+    const lines = [], spare = [];
+    for (const e of occurrences(addDays(from, -5), addDays(to, 6))) {
+      const line = { date: e.due, cents: -e.amount, label: e.row.title, row: e.row };
+      if (isCard(e.row)) lines.push(line);
+      else if (e.row.kind === 'Dépense' && e.row.id > 0 && !e.row.received) spare.push(line);
+    }
+    const p = pairBank(cardOps, lines, spare);
+    paidByCard = new Set(p.rescued.map((u) => `${u.kompte.row.id}|${u.kompte.date}`));
+    result.card = { from, to, matched: p.matched, unmarked: p.rescued, bankOnly: p.bankOnly,
+      kompteOnly: [...p.free].map((i) => lines[i]).filter((l) => l.date >= from && l.date <= to).sort(byBankDate) };
+  }
+  if (ops.length) {
+    const dates = ops.map((o) => o.date).sort();
+    const from = dates[0], to = dates[dates.length - 1];
+    const lines = [], cards = {};
+    for (const e of balanceEvents(addDays(from, -5), addDays(to, 6))) {
+      const debit = debitDate(e.row, e.due);
+      if (isCard(e.row)) {
+        const c = cards[debit] = cards[debit] || { date: debit, cents: 0, label: `Relevé carte du ${frDate(debit)}`, card: true };
+        c.cents += signed(e);
+      } else if (!paidByCard.has(`${e.row.id}|${e.due}`)) {
+        lines.push({ date: debit, cents: signed(e), label: e.row.title, row: e.row });
+      }
+    }
+    lines.push(...Object.values(cards));
+    const p = pairBank(ops, lines);
+    result.account = { from, to, matched: p.matched, bankOnly: p.bankOnly,
+      kompteOnly: [...p.free].map((i) => lines[i]).filter((l) => l.date >= from && l.date <= to).sort(byBankDate) };
+  }
+  return result;
+}
+
+/** État du compte la veille du début du mois prochain (= bank_projection du PC), d'après le solde de la banque
+    aujourd'hui et l'en-cours de la carte à débit différé (positif ; null = celui de Kompte). */
+function bankProjection(bank, card = null) {
+  const today = todayIso(), tomorrow = addDays(today, 1);
+  const periodEnd = monthPeriod(currentMonth())[1];
+  let plannedIn = 0, plannedOut = 0;
+  for (const e of balanceEvents(tomorrow, periodEnd)) {
+    if (isCard(e.row) && e.due <= today) continue; // achat déjà fait : compté dans l'en-cours carte
+    if (e.row.kind === 'Revenu') plannedIn += e.amount; else plannedOut += e.amount;
+  }
+  const pending = pendingByDate().map(([d, v]) => [d, v]);
+  const cardKompte = -pending.reduce((s, [, v]) => s + v, 0);
+  const conf = cardConf(state.compte);
+  let gapCard = null;
+  if (card !== null && conf) {
+    gapCard = card - cardKompte;
+    if (pending.length) pending[0][1] -= gapCard;
+    else if (card) pending.push([cardDebit(conf, today), -card]);
+  }
+  const cardIn = pending.filter(([d]) => d < periodEnd).reduce((s, [, v]) => s + v, 0);
+  const cardAfter = pending.filter(([d, v]) => d >= periodEnd && v);
+  const end = bank + plannedIn - plannedOut + cardIn;
+  const balance = getBalance();
+  const kompteEnd = balance === null ? null
+    : balance + plannedIn - plannedOut + pendingByDate().filter(([d]) => d < periodEnd).reduce((s, [, v]) => s + v, 0);
+  return { day: addDays(periodEnd, -1), end, bank, plannedIn, plannedOut, cardIn, cardAfter, kompteEnd,
+           kompteBalance: balance, gapBalance: balance === null ? null : bank - balance, gapCard, cardKompte };
 }
 
 function checkLine(date, label, cents, extra = '') {
@@ -1595,72 +1664,209 @@ function checkLine(date, label, cents, extra = '') {
       <span class="sub">${frDate(date)}${extra}</span></span>
       <span class="amount ${cents >= 0 ? 'plus' : 'minus'}">${cents >= 0 ? '+' : ''}${euro(cents)}</span></div>`;
 }
+const signedEuro = (v) => `${v > 0 ? '+' : v < 0 ? '−' : ''}${euro(Math.abs(v))}`;
 
-function renderCheck() {
-  const balance = getBalance();
+function projectionHtml() {
   const st = checkState;
-  let result = '';
-  if (st.error) result = `<p class="error-text" style="text-align:center">${esc(st.error)}</p>`;
-  if (st.ops) {
-    const r = matchBank(st.ops);
-    const gap = st.balance && balance !== null ? st.balance.cents - balanceAt(st.balance.date || todayIso()) : null;
-    result += `
+  if (!st.bank) return '';
+  let bank, card = null;
+  try {
+    bank = parseAmount(st.bank);
+    if (st.card && cardConf(state.compte)) card = Math.abs(parseAmount(st.card));
+  } catch (e) { return '<p class="error-text">Montant non compris.</p>'; }
+  const p = bankProjection(bank, card);
+  const detail = [`Solde à la banque aujourd’hui : ${euro(p.bank)}`];
+  if (p.plannedIn || p.plannedOut) detail.push(`Prévu dans Kompte d’ici là : +${euro(p.plannedIn)} de revenus, −${euro(p.plannedOut)} de dépenses`);
+  if (p.cardIn) detail.push(`Carte à débit différé prélevée avant : ${signedEuro(p.cardIn)}`);
+  for (const [d, v] of p.cardAfter) detail.push(`Puis carte prélevée le ${frDate(d)} : ${signedEuro(v)} → ${euro(p.end + v)} (avant les opérations du nouveau mois)`);
+  let cardLine = '';
+  if (cardConf(state.compte)) {
+    // Carte à débit différé : en-cours de la banque comparé à la somme des achats pas encore prélevés de Kompte.
+    if (p.gapCard === null) cardLine = `<p class="hint">💳 <b>Carte : Kompte compte ${euro(p.cardKompte)} d’achats pas encore prélevés.</b> Tape l’en-cours affiché par la banque pour comparer.</p>`;
+    else if (!p.gapCard) cardLine = `<p class="hint"><b style="color:var(--green)">💳 Carte : même en-cours que la banque (${euro(p.cardKompte)}) ✔</b></p>`;
+    else cardLine = `<p class="hint"><b style="color:var(--orange)">💳 Carte : la banque compte ${euro(p.cardKompte + p.gapCard)}, Kompte ${euro(p.cardKompte)} → écart de ${signedEuro(p.gapCard)}.</b> `
+      + (p.gapCard > 0 ? 'Un achat carte manque peut-être dans Kompte (ou n’est pas coché « carte »).' : 'Un achat carte est peut-être en trop dans Kompte.') + '</p>';
+  }
+  let compare;
+  if (p.kompteEnd === null) compare = '<p class="hint">Renseigne le solde du compte sur l’accueil pour comparer avec Kompte.</p>';
+  else {
+    const gap = p.end - p.kompteEnd;
+    if (!gap) compare = '<p class="hint"><b style="color:var(--green)">✔ Kompte prévoit exactement la même chose.</b></p>';
+    else {
+      const hints = [];
+      if (p.gapBalance) hints.push(`Solde du jour : la banque affiche ${euro(p.bank)}, Kompte ${euro(p.kompteBalance)} (${signedEuro(p.gapBalance)}). `
+        + (p.gapBalance < 0 ? 'Une dépense manque peut-être dans Kompte.' : 'Un revenu manque peut-être, ou une dépense a été notée en trop.'));
+      if (p.gapCard) hints.push(`En-cours carte : ${signedEuro(p.gapCard)} (voir ci-dessus).`);
+      hints.push('Importe les relevés ci-dessous pour retrouver l’opération.');
+      compare = `<p class="hint"><b style="color:var(--orange)">Kompte prévoit ${euro(p.kompteEnd)} : écart de ${signedEuro(gap)}</b><br>${hints.map(esc).join('<br>')}</p>`;
+    }
+  }
+  return `<div class="check-projection">
+      <p class="check-end ${p.end >= 0 ? 'good' : 'bad'}">Le ${frDate(p.day)} au soir : <b>${euro(p.end)}</b></p>
+      <p class="hint">${detail.map(esc).join('<br>')}</p>${cardLine}${compare}</div>`;
+}
+
+/** Opérations d'un relevé qui concernent le mois en cours (= bank_scope du PC) : les banques envoient souvent deux mois.
+    Compte : datées dans la période du mois. Carte : relevés entiers dont un achat ou le prélèvement tombe dans la période. */
+function bankScope(ops, card = false) {
+  const [start, end] = monthPeriod(currentMonth());
+  const conf = cardConf(state.compte);
+  if (!card || !conf) return ops.filter((o) => start <= o.date && o.date < end);
+  const cycles = new Set(ops.map((o) => [o.date, cardDebit(conf, o.date)])
+    .filter(([d, debit]) => (start <= d && d < end) || (start <= debit && debit < end)).map(([, debit]) => debit));
+  return ops.filter((o) => cycles.has(cardDebit(conf, o.date)));
+}
+/** Par relevé de la carte : total des achats à la banque et dans Kompte (achats déjà faits) = card_cycle_totals du PC. */
+function cardCycleTotals(cardOps) {
+  const conf = cardConf(state.compte);
+  if (!conf || !cardOps.length) return [];
+  const totals = {};
+  for (const o of cardOps) { const d = cardDebit(conf, o.date); (totals[d] = totals[d] || [0, 0])[0] -= o.cents; }
+  const dates = cardOps.map((o) => o.date).sort(), today = todayIso();
+  for (const e of occurrences(addDays(dates[0], -40), addDays(dates[dates.length - 1], 40))) {
+    const d = isCard(e.row) && e.due <= today ? cardDebit(conf, e.due) : null;
+    if (d && totals[d]) totals[d][1] += e.amount;
+  }
+  return Object.keys(totals).sort().map((d) => [d, totals[d][0], totals[d][1]]);
+}
+
+function checkSection(r, kind, cardOps = []) {
+  const card = kind === 'card';
+  const n = r.matched.length + (r.unmarked ? r.unmarked.length : 0);
+  let gapLine = '';
+  const files = checkState.files.filter((f) => f.card === card && f.balance);
+  if (!card && files.length && getBalance() !== null) {
+    const bal = files.map((f) => f.balance).sort((a, b) => ((a.date || '') < (b.date || '') ? 1 : -1))[0];
+    const day = bal.date || todayIso();
+    const gap = bal.cents - balanceAt(day);
+    gapLine = `<span class="${gap ? 'bad' : 'good'}">${gap ? `Écart de solde au ${frDate(day)} : ${gap > 0 ? '+' : ''}${euro(gap)}` : 'Solde identique à la banque ✔'}</span>`;
+  }
+  const cycles = card ? cardCycleTotals(cardOps).map(([d, bank, kompte]) => {
+    const gap = bank - kompte;
+    return `<span class="${gap ? 'warn' : 'good'}"><b>Prélèvement du ${frDate(d)} : banque ${euro(bank)} · Kompte ${euro(kompte)}${gap ? ` → écart de ${signedEuro(gap)}` : ' ✔'}</b></span>`;
+  }).join('') : '';
+  return `
       <div class="check-summary">
-        <span><b>${esc(st.file)}</b> · du ${frDate(r.from)} au ${frDate(r.to)}</span>
-        <span>✔ ${r.matched.length} opération${r.matched.length > 1 ? 's' : ''} retrouvée${r.matched.length > 1 ? 's' : ''}</span>
+        <span><b>${card ? '💳 Relevé de la carte' : '🏦 Relevé du compte'}</b> · du ${frDate(r.from)} au ${frDate(r.to)}</span>
+        <span>✔ ${n} opération${n > 1 ? 's' : ''} retrouvée${n > 1 ? 's' : ''}</span>
         <span class="${r.bankOnly.length ? 'warn' : ''}">➕ ${r.bankOnly.length} à la banque, pas dans Kompte</span>
         <span class="${r.kompteOnly.length ? 'warn' : ''}">⚠ ${r.kompteOnly.length} dans Kompte, pas à la banque</span>
-        ${gap === null ? '' : `<span class="${gap ? 'bad' : 'good'}">${gap ? `Écart de solde au ${frDate(st.balance.date || todayIso())} : ${gap > 0 ? '+' : ''}${euro(gap)}` : 'Solde identique à la banque ✔'}</span>`}
+        ${r.unmarked && r.unmarked.length ? `<span class="warn">💳 ${r.unmarked.length} payée${r.unmarked.length > 1 ? 's' : ''} par carte, pas cochée « carte » dans Kompte</span>` : ''}
+        ${cycles}
+        ${gapLine}
       </div>
+      ${r.unmarked && r.unmarked.length ? `<h3 class="check-title">Payé par carte, pas coché « carte »</h3>
+        <p class="note">Sans la coche, Kompte l’enlève du solde le jour de l’achat au lieu du jour du prélèvement.</p>
+        <div class="list">${r.unmarked.map((m, i) => `<div class="row static"><span class="body"><span class="title">${esc(m.kompte.label)}</span>
+          <span class="sub">${frDate(m.kompte.date)} · banque : ${esc(m.bank.label)}</span></span>
+          <span class="amount minus">${euro(m.kompte.cents)}</span>
+          <button type="button" class="mini" data-bank-mark="${i}">💳 Cocher</button></div>`).join('')}</div>` : ''}
       ${r.bankOnly.length ? `<h3 class="check-title">À la banque, pas dans Kompte</h3>
         <div class="list">${r.bankOnly.map((o, i) => `<div class="row static"><span class="body"><span class="title">${esc(o.label)}</span>
           <span class="sub">${frDate(o.date)}</span></span>
           <span class="amount ${o.cents >= 0 ? 'plus' : 'minus'}">${o.cents >= 0 ? '+' : ''}${euro(o.cents)}</span>
-          <button type="button" class="mini" data-bank-add="${i}">+ Ajouter</button></div>`).join('')}</div>` : ''}
+          <button type="button" class="mini" data-bank-add="${kind}:${i}">+ Ajouter</button></div>`).join('')}</div>` : ''}
       ${r.kompteOnly.length ? `<h3 class="check-title">Dans Kompte, pas à la banque</h3>
         <p class="note">Oubli, doublon, ou opération pas encore passée à la banque : touche-la pour la vérifier.</p>
         <div class="list">${r.kompteOnly.map((l) => l.row && l.row.id > 0
-          ? `<button type="button" class="row" data-item="${l.row.id}" data-due="${l.date}"><span class="body"><span class="title">${esc(l.label)}</span><span class="sub">${frDate(l.date)}</span></span><span class="amount ${l.cents >= 0 ? 'plus' : 'minus'}">${l.cents >= 0 ? '+' : ''}${euro(l.cents)}</span></button>`
-          : checkLine(l.date, l.label, l.cents, l.card ? ' · achats carte' : ' · montant fixe')).join('')}</div>` : ''}
+          ? `<button type="button" class="row" data-item="${l.row.id}" data-due="${l.date}"><span class="body"><span class="title">${esc(l.label)}</span><span class="sub">${frDate(l.date)}${card ? ' · achat carte' : ''}</span></span><span class="amount ${l.cents >= 0 ? 'plus' : 'minus'}">${l.cents >= 0 ? '+' : ''}${euro(l.cents)}</span></button>`
+          : checkLine(l.date, l.label, l.cents, l.card ? ' · achats carte (importe le relevé de la carte pour le détail)' : ' · montant fixe')).join('')}</div>` : ''}
       ${r.matched.length ? `<details class="check-ok"><summary>Voir les ${r.matched.length} opérations retrouvées</summary>
         <div class="list">${r.matched.map((m) => checkLine(m.bank.date, m.kompte.label, m.bank.cents, ` · banque : ${esc(m.bank.label)}`)).join('')}</div></details>` : ''}`;
+}
+/** Opérations des relevés gardées : celles du mois en cours, sauf si « Tout voir ». */
+function checkOps() {
+  const ops = checkState.files.filter((f) => !f.card).flatMap((f) => f.ops);
+  const cardOps = checkState.files.filter((f) => f.card).flatMap((f) => f.ops);
+  if (checkState.allMonths) return { ops, cardOps, hidden: 0 };
+  const kept = bankScope(ops), keptCard = bankScope(cardOps, true);
+  return { ops: kept, cardOps: keptCard, hidden: ops.length + cardOps.length - kept.length - keptCard.length };
+}
+function checkResult() {
+  const { ops, cardOps } = checkOps();
+  return matchBank(ops, cardOps);
+}
+
+function renderCheck() {
+  if (checkState.compte !== state.compte) Object.assign(checkState, { compte: state.compte, files: [], error: '', bank: '', card: '', allMonths: false });
+  const st = checkState;
+  const conf = cardConf(state.compte);
+  let result = '';
+  if (st.error) result = `<p class="error-text" style="text-align:center">${esc(st.error)}</p>`;
+  if (st.files.length) {
+    const { ops, cardOps, hidden } = checkOps();
+    if (hidden || st.allMonths) {
+      const [start, end] = monthPeriod(currentMonth());
+      result += `<p class="hint">${st.allMonths ? 'Toutes les opérations des relevés.'
+        : `Seulement le mois en cours (du ${frDate(start)} au ${frDate(addDays(end, -1))}) : ${hidden} opération${hidden > 1 ? 's' : ''} des mois précédents ignorée${hidden > 1 ? 's' : ''}.`}
+        <button type="button" class="chip" id="c-all">${st.allMonths ? 'Mois en cours seulement' : 'Tout voir'}</button></p>`;
+    }
+    if (!ops.length && !cardOps.length) result += '<p class="empty">Aucune opération du mois en cours dans ces relevés.</p>';
+    else {
+      const r = matchBank(ops, cardOps);
+      if (r.account) result += checkSection(r.account, 'account');
+      if (r.card) result += checkSection(r.card, 'card', cardOps);
+    }
   }
+  const files = st.files.map((f, i) => {
+    const dates = f.ops.map((o) => o.date).sort();
+    return `<div class="row static check-file"><span class="body"><span class="title">${f.card ? '💳' : '🏦'} ${esc(f.name)}</span>
+      <span class="sub">${f.card ? 'Relevé de la carte' : 'Relevé du compte'} · ${f.ops.length} opérations · du ${frDate(dates[0])} au ${frDate(dates[dates.length - 1])}</span></span>
+      ${conf ? `<button type="button" class="mini" data-bank-flip="${i}">${f.card ? 'C’est le compte' : 'C’est la carte'}</button>` : ''}
+      <button type="button" class="mini" data-bank-drop="${i}" aria-label="Retirer">✕</button></div>`;
+  }).join('');
   view.innerHTML = `
     <h2>Vérifier avec la banque</h2>
-    <label class="field" for="c-balance">Solde affiché par ta banque aujourd'hui (€)</label>
-    <div class="row2"><input class="input big" id="c-balance" inputmode="decimal" autocomplete="off" placeholder="0,00">
-      <button type="button" class="primary" id="c-compare">Comparer</button></div>
-    <p class="hint" id="c-balance-result">${balance === null ? 'Renseigne d’abord le solde de ton compte sur le tableau de bord.'
-      : `Kompte attend ${euro(balance)} (les achats carte comptent seulement quand ils sont prélevés).`}</p>
-    <label class="field">Importer un relevé de la banque</label>
+    <label class="field">Où en sera ton compte à la fin du mois ?</label>
+    <p class="hint">Recopie ce que ta banque affiche aujourd’hui : Kompte y ajoute les opérations prévues jusqu’au début du mois prochain.</p>
+    <label class="field" for="c-balance">Solde du compte (€)</label>
+    <input class="input big" id="c-balance" inputmode="decimal" autocomplete="off" placeholder="0,00" value="${esc(st.bank)}">
+    ${conf ? `<label class="field" for="c-card">En-cours carte à débit différé (€)</label>
+    <input class="input big" id="c-card" inputmode="decimal" autocomplete="off" placeholder="achats pas encore prélevés" value="${esc(st.card)}">` : ''}
+    <button type="button" class="primary wide" id="c-compare">Calculer</button>
+    <div id="c-projection">${projectionHtml()}</div>
+    <label class="field">Importer les relevés de la banque</label>
     <p class="hint">Sur le site de ta banque, télécharge tes opérations (format OFX de préférence, sinon CSV ou QIF),
-      puis choisis le fichier ici. Kompte retrouve chaque opération par son montant et sa date.</p>
-    <label class="secondary wide file-btn">Choisir un fichier…
-      <input type="file" id="c-file" accept=".ofx,.qfx,.qif,.csv,.txt,application/x-ofx,text/csv" hidden></label>
+      puis choisis le fichier ici.${conf ? ' Avec la carte à débit différé, importe aussi le relevé de la carte : ses achats sont retrouvés un par un, et le prélèvement mensuel sur le relevé du compte.' : ''}
+      Rien n’est enregistré par l’import.</p>
+    <label class="secondary wide file-btn">Choisir des fichiers…
+      <input type="file" id="c-file" multiple accept=".ofx,.qfx,.qif,.csv,.txt,application/x-ofx,text/csv" hidden></label>
+    ${files ? `<div class="list">${files}</div>` : ''}
     ${result}`;
 }
 
-/** Comparaison simple : solde tapé par l'utilisateur. */
+/** Fin du mois : solde (et en-cours carte) tapés par l'utilisateur. */
 function compareBalance() {
-  const input = $('#c-balance'), out = $('#c-balance-result');
-  const balance = getBalance();
-  if (balance === null) return;
-  let typed;
-  try { typed = parseAmount(input.value); } catch (e) { out.textContent = 'Montant non compris.'; return; }
-  const gap = typed - balance;
-  out.innerHTML = gap === 0 ? '<b style="color:var(--green)">✔ Tout est juste : même solde que la banque.</b>'
-    : `<b style="color:var(--red)">Écart de ${gap > 0 ? '+' : ''}${euro(gap)}</b> : la banque affiche ${euro(typed)}, Kompte attend ${euro(balance)}.
-       ${gap < 0 ? 'Une dépense manque peut-être dans Kompte.' : 'Un revenu manque peut-être, ou une dépense a été notée en trop.'}
-       Importe un relevé pour la retrouver.`;
+  checkState.bank = ($('#c-balance') || { value: '' }).value.trim();
+  checkState.card = ($('#c-card') || { value: '' }).value.trim();
+  const out = $('#c-projection');
+  if (out) out.innerHTML = projectionHtml();
 }
 
-async function importBankFile(file) {
-  try {
-    const parsed = parseBankFile(await readBankFile(file));
-    Object.assign(checkState, { file: file.name, ops: parsed.ops.length ? parsed.ops : null, balance: parsed.balance,
-      error: parsed.ops.length ? '' : 'Aucune opération trouvée dans ce fichier : essaie le format OFX, ou envoie-moi un exemple.' });
-  } catch (e) {
-    Object.assign(checkState, { file: null, ops: null, balance: null, error: 'Fichier illisible.' });
+/** Solde du relevé repris dans « fin du mois » s'il date d'hier ou d'aujourd'hui (= _prefill_check du PC). */
+function prefillCheck(parsed) {
+  const bal = parsed.balance;
+  if (!bal || (bal.date || '') < addDays(todayIso(), -1)) return;
+  const key = parsed.card ? 'card' : 'bank';
+  if (!checkState[key]) checkState[key] = amountText(parsed.card ? Math.abs(bal.cents) : bal.cents);
+}
+
+async function importBankFiles(list) {
+  checkState.error = '';
+  const conf = cardConf(state.compte);
+  for (const file of list) {
+    try {
+      const parsed = parseBankFile(await readBankFile(file));
+      if (!parsed.ops.length) {
+        checkState.error = `${file.name} : aucune opération trouvée. Essaie le format OFX, ou envoie-moi un exemple.`;
+        continue;
+      }
+      checkState.files = checkState.files.filter((f) => f.name !== file.name);
+      checkState.files.push({ name: file.name, ops: parsed.ops, balance: parsed.balance, card: !!conf && parsed.card });
+      prefillCheck(parsed);
+    } catch (e) {
+      checkState.error = `${file.name} : fichier illisible.`;
+    }
   }
   render();
 }
@@ -2944,6 +3150,9 @@ function renderTransactions() {
       </button>`;
   }).join('');
   const month = MONTHS[+ym.slice(5, 7) - 1];
+  const cardMode = state.cardOnly && !!cardConf(state.compte);
+  const statements = cardMode ? cardStatements(ym, chosen, needle) : [];
+  const cardCount = statements.reduce((n, st) => n + st.rows.length, 0);
   view.innerHTML = `
     <div class="monthbar year">
       <button type="button" class="icon-btn" data-month="-12" aria-label="Année précédente">‹</button>
@@ -2956,16 +3165,55 @@ function renderTransactions() {
       <button type="button" class="icon-btn" data-month="1" aria-label="Mois suivant">›</button>
     </div>
     ${periodHint()}
-    <div class="totals"><span class="plus">+${euro(income)}</span><span class="minus">−${euro(out)}</span>
-      <span>= ${euro(income - out)}</span></div>
+    ${cardMode ? `<div class="totals"><span>💳 ${cardCount} achat${cardCount > 1 ? 's' : ''}</span>
+      <span class="minus">−${euro(statements.reduce((t, st) => t + st.total, 0))}</span></div>`
+    : `<div class="totals"><span class="plus">+${euro(income)}</span><span class="minus">−${euro(out)}</span>
+      <span>= ${euro(income - out)}</span></div>`}
     <input class="search" id="search" type="search" placeholder="Rechercher dans le mois…" value="${esc(state.query)}">
     <div class="filter-bar">
       <button type="button" class="filter-btn" id="cat-filter">${filterLabel} ${state.catsOpen ? '▲' : '▼'}</button>
       ${chosen.length ? '<button type="button" class="chip" id="cat-reset">Tout afficher</button>' : ''}
+      ${cardConf(state.compte) ? `<button type="button" class="filter-btn${cardMode ? ' on' : ''}" id="card-only">💳 Carte</button>` : ''}
     </div>
     ${filterGrid}
-    <div class="list">${rows || `<p class="empty">${state.query || chosen.length ? 'Aucune opération trouvée.' : 'Aucune opération ce mois-ci.'}</p>`}</div>
-    ${cashRowsOfMonth(ym)}`;
+    ${cardMode ? cardStatementsHtml(statements)
+    : `<div class="list">${rows || `<p class="empty">${state.query || chosen.length ? 'Aucune opération trouvée.' : 'Aucune opération ce mois-ci.'}</p>`}</div>
+    ${cashRowsOfMonth(ym)}`}`;
+}
+/** Achats de la carte à débit différé regroupés par relevé (= card_statements du PC) : relevés dont un achat ou le
+    prélèvement tombe dans la période du mois, avec tous leurs achats. [{start, end, debit, rows: [e], total}]. */
+function cardStatements(ym, chosen = [], needle = '') {
+  const conf = cardConf(state.compte);
+  if (!conf) return [];
+  const [start, end] = monthPeriod(ym);
+  const groups = {}, shown = new Set();
+  for (const e of occurrences(addDays(start, -DEFERRED_LOOKBACK), addDays(end, 40))) {
+    if (!isCard(e.row)) continue;
+    const debit = cardDebit(conf, e.due);
+    if ((start <= e.due && e.due < end) || (start <= debit && debit < end)) shown.add(debit); // relevé affiché en entier
+    if (chosen.length && !chosen.includes(e.row.category)) continue;
+    if (needle && !(e.row.title.toLowerCase().includes(needle) || e.row.category.toLowerCase().includes(needle)
+      || amountText(e.amount).includes(needle.replace('.', ',')))) continue;
+    const cycleEnd = cardCycleEnd(conf, e.due);
+    const first = addDays(dueInMonth(monthShift(cycleEnd, -1).slice(0, 7), conf.cutoff), 1);
+    const g = groups[debit] = groups[debit] || { start: first, end: cycleEnd, debit, rows: [], total: 0 };
+    g.rows.push(e);
+    g.total += e.amount;
+  }
+  return Object.keys(groups).sort().filter((k) => shown.has(k)).map((k) => groups[k]);
+}
+function cardStatementsHtml(list) {
+  if (!list.length) return '<p class="empty">Aucun achat carte ce mois-ci.</p>';
+  const today = todayIso();
+  return list.map((st) => `<div class="card-head"><span>Relevé du ${frDate(st.start)} au ${frDate(st.end)}</span>
+      <span class="minus">−${euro(st.total)}</span></div>
+    <p class="hint">${st.debit <= today ? 'Prélevé' : 'Sera prélevé'} le ${frDate(st.debit)} · ${st.rows.length} achat${st.rows.length > 1 ? 's' : ''}</p>
+    <div class="list">${[...st.rows].sort((a, b) => (a.due < b.due ? -1 : a.due > b.due ? 1 : 0)).map((e) => {
+      const sub = subOf(e.row);
+      return `<button type="button" class="row" data-item="${e.row.id}" data-due="${e.due}">${catIcon(e.row.category)}
+        <span class="body"><span class="title">${esc(e.row.title)}</span><span class="sub">${esc(e.row.category)} · ${frDate(e.due)}${sub ? ` · ${esc(sub.name)}` : ''}</span></span>
+        <span class="amount minus">−${euro(e.amount)}</span></button>`;
+    }).join('')}</div>`).join('');
 }
 /** Dépenses « En espèce » du mois, hors totaux (le retrait y compte déjà). */
 function cashRowsOfMonth(ym) {
@@ -4007,6 +4255,7 @@ document.addEventListener('click', async (event) => {
   }
   if (t.closest('#cat-filter')) { state.catsOpen = !state.catsOpen; render(); return; }
   if (t.closest('#cat-reset')) { state.cats = []; render(); return; }
+  if (t.closest('#card-only')) { state.cardOnly = !state.cardOnly; render(); return; }
   const filterCat = t.closest('[data-filter-cat]');
   if (filterCat) {
     const name = filterCat.dataset.filterCat;
@@ -4021,15 +4270,31 @@ document.addEventListener('click', async (event) => {
   if (t.closest('#export-month')) { exportSheet(); return; }
   if (t.closest('#logo-remove')) { saveLogo(state.compte, null); return; }
   if (t.closest('#c-compare')) { compareBalance(); return; }
+  if (t.closest('#c-all')) { checkState.allMonths = !checkState.allMonths; render(); return; }
   const bankAdd = t.closest('[data-bank-add]');
-  if (bankAdd && checkState.ops) {
-    const op = matchBank(checkState.ops).bankOnly[Number(bankAdd.dataset.bankAdd)];
+  if (bankAdd) {
+    const [kind, index] = bankAdd.dataset.bankAdd.split(':');
+    const part = checkResult()[kind];
+    const op = part && part.bankOnly[Number(index)];
     if (op) {
       transactionSheet(null, { kind: op.cents < 0 ? 'Dépense' : 'Revenu', amount: Math.abs(op.cents), date: op.date,
-                               title: op.label.slice(0, 60), heading: 'Ajouter depuis la banque', card: false });
+                               title: op.label.slice(0, 60), heading: 'Ajouter depuis la banque',
+                               card: kind === 'card' && op.cents < 0 });
     }
     return;
   }
+  const bankMark = t.closest('[data-bank-mark]');
+  if (bankMark) {
+    const part = checkResult().card;
+    const m = part && part.unmarked[Number(bankMark.dataset.bankMark)];
+    const value = m && cardWithItem(m.kompte.row.id, true);
+    if (value) { try { await saveCard(value); } catch (e) { toast(e.message); } render(); }
+    return;
+  }
+  const bankFlip = t.closest('[data-bank-flip]');
+  if (bankFlip) { const f = checkState.files[Number(bankFlip.dataset.bankFlip)]; if (f) f.card = !f.card; render(); return; }
+  const bankDrop = t.closest('[data-bank-drop]');
+  if (bankDrop) { checkState.files.splice(Number(bankDrop.dataset.bankDrop), 1); render(); return; }
   const catRow = t.closest('[data-category]');
   if (catRow) { categorySheet(catRow.dataset.category); return; }
   const move = t.closest('[data-deposit], [data-withdraw]');
@@ -4086,7 +4351,7 @@ document.addEventListener('click', async (event) => {
 
 // Le début du mois s'applique tout de suite, puis part en ligne.
 document.addEventListener('change', async (event) => {
-  if (event.target.id === 'c-file' && event.target.files && event.target.files[0]) { importBankFile(event.target.files[0]); return; }
+  if (event.target.id === 'c-file' && event.target.files && event.target.files.length) { importBankFiles([...event.target.files]); return; }
   if (event.target.id === 'logo-file' && event.target.files && event.target.files[0]) {
     const compteId = state.compte;
     try { await saveLogo(compteId, await logoFromFile(event.target.files[0])); } catch (e) { toast(e.message); }

@@ -237,6 +237,13 @@ textarea.input { resize: vertical; font: inherit; font-size: 16px; line-height: 
 .file-btn { display: block; text-align: center; cursor: pointer; }
 .check-summary { display: flex; flex-direction: column; gap: 4px; background: var(--panel); border-radius: 14px; padding: 14px 16px; margin-top: 16px; font-size: 14px; }
 .check-summary .warn { color: var(--orange); } .check-summary .bad { color: var(--red); font-weight: 700; } .check-summary .good { color: var(--green); font-weight: 700; }
+.check-projection { background: var(--panel); border-radius: 14px; padding: 12px 16px; margin: 12px 0 18px; }
+.check-end { font-size: 17px; margin: 0 0 6px; } .check-end.good b { color: var(--green); } .check-end.bad b { color: var(--red); }
+.check-file .sub { font-size: 12px; }
+#c-all { color: var(--green); font-weight: 700; text-decoration: underline; }
+.card-head { display: flex; justify-content: space-between; align-items: baseline; margin: 18px 2px 2px; font-weight: 700; }
+.card-head .minus { font-size: 16px; white-space: nowrap; margin-left: 10px; }
+.filter-btn.on { background: var(--orange); color: #1a1205; font-weight: 700; }
 .check-title { margin: 18px 0 6px; font-size: 15px; }
 .check-ok { margin-top: 16px; } .check-ok summary { color: var(--muted); cursor: pointer; }
 
