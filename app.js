@@ -1566,27 +1566,67 @@ function balanceAt(day) {
   for (const e of balanceEvents(addDays(day, 1), addDays(today, 1))) after += signed(e);
   return now - after;
 }
-/** Associe chaque opération du relevé à une ligne de Kompte : même montant, dates à 4 jours près (la plus proche).
-    Les lignes de secours (spare) ne servent que si aucune ligne principale ne convient (= _pair du PC). */
+// Mots sans valeur pour reconnaître une opération (ajoutés par la banque) = BANK_NOISE du PC.
+const BANK_NOISE = new Set(['cb', 'carte', 'paiement', 'par', 'prlv', 'prelevement', 'sepa', 'vir', 'virement', 'achat', 'de', 'du',
+  'des', 'la', 'le', 'les', 'et', 'en', 'au', 'aux', 'fr', 'france', 'sa', 'sas', 'sarl', 'www', 'com',
+  'facture', 'recu', 'emis', 'faveur', 'ref', 'operation']);
+/** Mots significatifs d'un libellé : minuscules, sans accent ni chiffre (= label_words du PC). */
+function labelWords(text) {
+  const plain = String(text || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
+  return new Set((plain.match(/[a-z]+/g) || []).filter((w) => w.length >= 3 && !BANK_NOISE.has(w)));
+}
+/** Nombre de mots du libellé Kompte retrouvés dans celui de la banque (début de mot accepté dès 4 lettres). */
+function labelScore(bank, kompte) {
+  const words = [...labelWords(bank)];
+  let n = 0;
+  for (const w of labelWords(kompte)) {
+    if (words.some((x) => x === w || (w.length >= 4 && x.length >= 4 && (x.startsWith(w) || w.startsWith(x))))) n += 1;
+  }
+  return n;
+}
+/** Associe chaque opération du relevé à une ligne de Kompte (= _pair du PC), en trois passes :
+    1. même montant, dates à 4 jours près (le libellé départage, puis la date la plus proche) ;
+    2. même montant et libellé ressemblant, jusqu'à 31 jours d'écart (note 'date') ;
+    3. libellé ressemblant, dates à 4 jours près, montant différent (amountDiff).
+    Les lignes de secours (spare) ne servent qu'aux passes 1 et 2. */
 function pairBank(ops, lines, spare = []) {
-  const dayDiff = (a, b) => Math.abs((Date.parse(a) - Date.parse(b)) / 86400000);
-  const closest = (pool, free, op) => {
-    let best = -1;
+  const dayDiff = (a, b) => Math.round(Math.abs((Date.parse(a) - Date.parse(b)) / 86400000));
+  const best = (pool, free, op, maxGap, same = true, needLabel = false) => {
+    let found = -1, foundKey = null;
     for (const i of free) {
-      if (pool[i].cents !== op.cents || dayDiff(pool[i].date, op.date) > 4) continue;
-      if (best < 0 || dayDiff(pool[i].date, op.date) < dayDiff(pool[best].date, op.date)) best = i;
+      const line = pool[i];
+      if (same && line.cents !== op.cents) continue;
+      if (!same && (line.cents === op.cents || (line.cents < 0) !== (op.cents < 0))) continue;
+      const g = dayDiff(line.date, op.date);
+      if (g > maxGap) continue;
+      let score = labelScore(op.label, line.label);
+      if (line.card && /\b(carte|cb)\b/i.test(op.label)) score += 1; // prélèvement mensuel de la carte
+      if (needLabel && !score) continue;
+      const key = [-score, g, Math.abs(line.cents - op.cents)];
+      const less = foundKey === null || key[0] < foundKey[0] || (key[0] === foundKey[0] && (key[1] < foundKey[1]
+        || (key[1] === foundKey[1] && key[2] < foundKey[2])));
+      if (less) { found = i; foundKey = key; }
     }
-    return best;
+    return found;
   };
   const free = new Set(lines.map((_, i) => i)), freeSpare = new Set(spare.map((_, i) => i));
-  const matched = [], rescued = [], bankOnly = [];
-  for (const op of [...ops].sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0))) {
-    let best = closest(lines, free, op);
-    if (best >= 0) { free.delete(best); matched.push({ bank: op, kompte: lines[best] }); continue; }
-    best = closest(spare, freeSpare, op);
-    if (best >= 0) { freeSpare.delete(best); rescued.push({ bank: op, kompte: spare[best] }); } else bankOnly.push(op);
+  const matched = [], rescued = [], amountDiff = [], bankOnly = [];
+  let waiting = [...ops].sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+  for (const [maxGap, needLabel, note] of [[4, false, null], [31, true, 'date']]) {
+    const left = [];
+    for (const op of waiting) {
+      let i = best(lines, free, op, maxGap, true, needLabel);
+      if (i >= 0) { free.delete(i); matched.push({ bank: op, kompte: lines[i], note }); continue; }
+      i = best(spare, freeSpare, op, maxGap, true, needLabel);
+      if (i >= 0) { freeSpare.delete(i); rescued.push({ bank: op, kompte: spare[i], note }); } else left.push(op);
+    }
+    waiting = left;
   }
-  return { matched, rescued, bankOnly, free };
+  for (const op of waiting) {
+    const i = best(lines, free, op, 4, false, true);
+    if (i >= 0) { free.delete(i); amountDiff.push({ bank: op, kompte: lines[i] }); } else bankOnly.push(op);
+  }
+  return { matched, rescued, amountDiff, bankOnly, free };
 }
 const byBankDate = (a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0);
 /** Rapproche les relevés et Kompte (= match_bank du PC). Relevé du compte : les achats carte d'un même prélèvement
@@ -1599,21 +1639,21 @@ function matchBank(ops, cardOps = []) {
     const dates = cardOps.map((o) => o.date).sort();
     const from = dates[0], to = dates[dates.length - 1];
     const lines = [], spare = [];
-    for (const e of occurrences(addDays(from, -5), addDays(to, 6))) {
+    for (const e of occurrences(addDays(from, -32), addDays(to, 32))) {
       const line = { date: e.due, cents: -e.amount, label: e.row.title, row: e.row };
       if (isCard(e.row)) lines.push(line);
       else if (e.row.kind === 'Dépense' && e.row.id > 0 && !e.row.received) spare.push(line);
     }
     const p = pairBank(cardOps, lines, spare);
     paidByCard = new Set(p.rescued.map((u) => `${u.kompte.row.id}|${u.kompte.date}`));
-    result.card = { from, to, matched: p.matched, unmarked: p.rescued, bankOnly: p.bankOnly,
+    result.card = { from, to, matched: p.matched, unmarked: p.rescued, amountDiff: p.amountDiff, bankOnly: p.bankOnly,
       kompteOnly: [...p.free].map((i) => lines[i]).filter((l) => l.date >= from && l.date <= to).sort(byBankDate) };
   }
   if (ops.length) {
     const dates = ops.map((o) => o.date).sort();
     const from = dates[0], to = dates[dates.length - 1];
     const lines = [], cards = {};
-    for (const e of balanceEvents(addDays(from, -5), addDays(to, 6))) {
+    for (const e of balanceEvents(addDays(from, -32), addDays(to, 32))) {
       const debit = debitDate(e.row, e.due);
       if (isCard(e.row)) {
         const c = cards[debit] = cards[debit] || { date: debit, cents: 0, label: `Relevé carte du ${frDate(debit)}`, card: true };
@@ -1624,7 +1664,7 @@ function matchBank(ops, cardOps = []) {
     }
     lines.push(...Object.values(cards));
     const p = pairBank(ops, lines);
-    result.account = { from, to, matched: p.matched, bankOnly: p.bankOnly,
+    result.account = { from, to, matched: p.matched, amountDiff: p.amountDiff, bankOnly: p.bankOnly,
       kompteOnly: [...p.free].map((i) => lines[i]).filter((l) => l.date >= from && l.date <= to).sort(byBankDate) };
   }
   return result;
@@ -1730,9 +1770,17 @@ function cardCycleTotals(cardOps) {
   return Object.keys(totals).sort().map((d) => [d, totals[d][0], totals[d][1]]);
 }
 
+/** Ligne de Kompte dans Vérifier : ouvrable si c'est une transaction (pas un montant fixe ni un total carte). */
+function kompteLine(l, extra) {
+  const amount = `<span class="amount ${l.cents >= 0 ? 'plus' : 'minus'}">${l.cents >= 0 ? '+' : ''}${euro(l.cents)}</span>`;
+  return l.row && l.row.id > 0
+    ? `<button type="button" class="row" data-item="${l.row.id}" data-due="${l.date}"><span class="body"><span class="title">${esc(l.label)}</span><span class="sub">${frDate(l.date)}${extra}</span></span>${amount}</button>`
+    : checkLine(l.date, l.label, l.cents, extra);
+}
 function checkSection(r, kind, cardOps = []) {
   const card = kind === 'card';
   const n = r.matched.length + (r.unmarked ? r.unmarked.length : 0);
+  const moved = r.matched.filter((m) => m.note === 'date');
   let gapLine = '';
   const files = checkState.files.filter((f) => f.card === card && f.balance);
   if (!card && files.length && getBalance() !== null) {
@@ -1749,6 +1797,8 @@ function checkSection(r, kind, cardOps = []) {
       <div class="check-summary">
         <span><b>${card ? '💳 Relevé de la carte' : '🏦 Relevé du compte'}</b> · du ${frDate(r.from)} au ${frDate(r.to)}</span>
         <span>✔ ${n} opération${n > 1 ? 's' : ''} retrouvée${n > 1 ? 's' : ''}</span>
+        ${moved.length ? `<span class="warn">📅 dont ${moved.length} à une autre date dans Kompte (même montant et libellé)</span>` : ''}
+        ${r.amountDiff.length ? `<span class="warn">≠ ${r.amountDiff.length} avec un montant différent</span>` : ''}
         <span class="${r.bankOnly.length ? 'warn' : ''}">➕ ${r.bankOnly.length} à la banque, pas dans Kompte</span>
         <span class="${r.kompteOnly.length ? 'warn' : ''}">⚠ ${r.kompteOnly.length} dans Kompte, pas à la banque</span>
         ${r.unmarked && r.unmarked.length ? `<span class="warn">💳 ${r.unmarked.length} payée${r.unmarked.length > 1 ? 's' : ''} par carte, pas cochée « carte » dans Kompte</span>` : ''}
@@ -1761,6 +1811,12 @@ function checkSection(r, kind, cardOps = []) {
           <span class="sub">${frDate(m.kompte.date)} · banque : ${esc(m.bank.label)}</span></span>
           <span class="amount minus">${euro(m.kompte.cents)}</span>
           <button type="button" class="mini" data-bank-mark="${i}">💳 Cocher</button></div>`).join('')}</div>` : ''}
+      ${r.amountDiff.length ? `<h3 class="check-title">Même opération, montant différent</h3>
+        <p class="note">Libellé et date proches, mais pas le même montant : touche-la pour corriger Kompte.</p>
+        <div class="list wrap-sub">${r.amountDiff.map((m) => kompteLine(m.kompte, ` · banque : <b>${m.bank.cents >= 0 ? '+' : ''}${euro(m.bank.cents)}</b> (écart ${m.bank.cents - m.kompte.cents > 0 ? '+' : ''}${euro(m.bank.cents - m.kompte.cents)}) le ${frDate(m.bank.date)} · ${esc(m.bank.label)}`)).join('')}</div>` : ''}
+      ${moved.length ? `<h3 class="check-title">Retrouvées à une autre date</h3>
+        <p class="note">Même montant et libellé ressemblant, mais pas la même date : touche-la pour corriger la date dans Kompte si besoin.</p>
+        <div class="list wrap-sub">${moved.map((m) => kompteLine(m.kompte, ` · banque : <b>le ${frDate(m.bank.date)}</b> · ${esc(m.bank.label)}`)).join('')}</div>` : ''}
       ${r.bankOnly.length ? `<h3 class="check-title">À la banque, pas dans Kompte</h3>
         <div class="list">${r.bankOnly.map((o, i) => `<div class="row static"><span class="body"><span class="title">${esc(o.label)}</span>
           <span class="sub">${frDate(o.date)}</span></span>
