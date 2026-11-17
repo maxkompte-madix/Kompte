@@ -2097,10 +2097,12 @@ function noCarry() {
 const BILAN_INFO = `<b>Bilan du mois</b><br>Revenus du mois − toutes ses dépenses (passées et à venir).
   Positif : le mois rapporte plus qu’il ne coûte.<br><br>
   <b>Report du mois dernier</b><br>Ce qui restait la veille du début du mois : solde actuel − achats carte pas encore
-  prélevés − opérations du mois déjà passées. Pour information : jamais ajouté au disponible.<br><br>
+  prélevés − opérations du mois déjà passées. Pour information : jamais ajouté au disponible.<br>
+  Report + bilan = ce qui restera à la fin du mois.<br><br>
   Détail du calcul : touche la case.`;
-const FIRST_MONTH_INFO = `Premier mois dans Kompte : pas de report, car le mois d’avant n’a pas été saisi (il serait faux).
-  Réglage : Réglages › Partagé avec le PC.`;
+const FIRST_MONTH_INFO = `Premier mois dans Kompte : pas de report. À régler seulement si le début de ce mois n’a pas été saisi
+  (le report serait faux). Tout est saisi depuis le premier jour du mois ? Laisser « Pas réglé » : le report est juste et lu
+  avec le bilan. Réglage : Réglages › Partagé avec le PC.`;
 
 /** « Du 14 novembre au 13 décembre », ou rien pour un mois normal. */
 function periodText(ym, day = monthStart()) {
@@ -3625,8 +3627,9 @@ function renderAccount() {
       ${Array.from({ length: 36 }, (_, i) => monthShift(`${currentMonth()}-01`, -i).slice(0, 7)).map((m) =>
         `<option value="${m}" ${m === firstMonth() ? 'selected' : ''}>${monthLabel(m)}</option>`).join('')}
     </select>
-    <p class="hint">Ce mois-là, pas de « Report du mois dernier » : le mois d’avant n’a pas été saisi, le report serait faux
-      (et le plafond des budgets ne le compte pas).</p>
+    <p class="hint">À régler seulement si le début de ton premier mois n’a pas été saisi : ce mois-là, pas de « Report du mois
+      dernier » (il serait faux) et le plafond des budgets ne le compte pas. Tout est saisi depuis le premier jour du mois ?
+      Laisse « Pas réglé » : le report est juste, et report + bilan = ce qui restera à la fin du mois.</p>
     <label class="field" for="card-cutoff">Carte à débit différé</label>
     <select class="input" id="card-enabled">
       <option value="0" ${card.enabled ? '' : 'selected'}>Pas de carte à débit différé</option>
