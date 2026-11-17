@@ -748,8 +748,9 @@ function roundupReminder(pocket) {
 }
 
 /** Ce qui restait à la fin du mois dernier : l'argent réel d'aujourd'hui (solde − achats pas encore prélevés)
-    moins les opérations du mois en cours déjà passées. */
+    moins les opérations du mois en cours déjà passées. null pendant le premier mois dans Kompte (= carry_over du PC). */
 function carryOver(balance) {
+  if (noCarry()) return null;
   const today = todayIso();
   let passed = 0;
   for (const e of occurrences(...monthPeriod(currentMonth()))) if (e.due <= today) passed += signed(e);
@@ -1083,7 +1084,7 @@ function budgetCarry(key, list, ym, spentOf) {
     − dépenses fixes du mois. Les fixes d'une catégorie budgétée (keys) sont déjà dans son budget. */
 function budgetRoom(ym, keys) {
   const balance = getBalance();
-  const carry = balance !== null && ym === currentMonth() ? carryOver(balance) : 0;
+  const carry = (balance !== null && ym === currentMonth() ? carryOver(balance) : 0) || 0;
   let fixedIn = 0, fixedOut = 0;
   for (const e of summary(ym).events) {
     if (e.row.id >= 0) continue;
@@ -2081,6 +2082,26 @@ function periodOf(iso, day = monthStart()) {
 
 function currentMonth() { return periodOf(todayIso()); }
 
+/** Premier mois saisi dans Kompte pour le compte ouvert (AAAA-MM), null si non réglé (= first_month du PC). */
+function firstMonth() {
+  const raw = state.all && state.all.kv.first_month;
+  const ym = raw && typeof raw === 'object' ? raw[state.compte] : null;
+  return typeof ym === 'string' && /^\d{4}-(0[1-9]|1[0-2])$/.test(ym) ? ym : null;
+}
+/** Mois en cours = premier mois dans Kompte (ou avant) : pas de report, le mois d'avant n'a pas été saisi. */
+function noCarry() {
+  const first = firstMonth();
+  return first !== null && currentMonth() <= first;
+}
+// Bulle « i » de la case Bilan du mois (même texte que BILAN_INFO du PC, au nom du menu près).
+const BILAN_INFO = `<b>Bilan du mois</b><br>Revenus du mois − toutes ses dépenses (passées et à venir).
+  Positif : le mois rapporte plus qu’il ne coûte.<br><br>
+  <b>Report du mois dernier</b><br>Ce qui restait la veille du début du mois : solde actuel − achats carte pas encore
+  prélevés − opérations du mois déjà passées. Pour information : jamais ajouté au disponible.<br><br>
+  Détail du calcul : touche la case.`;
+const FIRST_MONTH_INFO = `Premier mois dans Kompte : pas de report, car le mois d’avant n’a pas été saisi (il serait faux).
+  Réglage : Réglages › Partagé avec le PC.`;
+
 /** « Du 14 novembre au 13 décembre », ou rien pour un mois normal. */
 function periodText(ym, day = monthStart()) {
   if (day <= 1) return '';
@@ -2869,6 +2890,7 @@ function renderDashboard() {
   const ref = balanceReference();
   const free = balance === null ? null : availableMoney(balance);
   const carry = balance === null || state.selected !== currentMonth() ? null : carryOver(balance);
+  const first = state.selected === currentMonth() && noCarry();
   const ym = state.selected;
   const { income, out, paid, events } = summary(ym);
   const isToday = ym === currentMonth();
@@ -2899,8 +2921,11 @@ function renderDashboard() {
       ${metric('Revenus prévus ›', bilanParts(ym).fixedIn, 'var(--green)', 'incomes')}
       ${metric('Dépenses prévues ›', out - paid, 'var(--red)', 'upcoming')}
       ${metric('Déjà dépensé ›', paid, 'var(--text)', 'spending')}
-      <button type="button" class="metric" id="bilan"><small>Bilan du mois ›</small><b style="color:var(--blue)">${euro(income - out)}</b>
-        ${carry === null ? '' : `<span class="carry" style="color:var(${carry >= 0 ? '--green' : '--red'})">Report du mois dernier : ${carry > 0 ? '+' : ''}${euro(carry)}</span>`}</button>
+      <button type="button" class="metric has-info" id="bilan"><small>Bilan du mois ›</small><b style="color:var(--blue)">${euro(income - out)}</b>
+        ${first ? '<span class="carry" style="color:var(--muted)">Pas de report : 1er mois dans Kompte</span>'
+          : carry === null ? '' : `<span class="carry" style="color:var(${carry >= 0 ? '--green' : '--red'})">Report du mois dernier : ${carry > 0 ? '+' : ''}${euro(carry)}</span>`}
+        <span class="info-dot" id="bilan-i" role="button" aria-label="Explication du bilan et du report">i</span></button>
+      <p class="info-pop" id="bilan-info" hidden>${BILAN_INFO}${first ? `<br><br>${FIRST_MONTH_INFO}` : ''}</p>
       ${budgetTile(ym)}
     </div>
     ${isToday ? roundupCard() : ''}
@@ -3025,8 +3050,9 @@ function bilanParts(ym) {
     else p.futureOut += e.amount;
   }
   p.bilan = p.fixedIn + p.otherIn - p.paidOut - p.futureOut;
+  p.first = ym === currentMonth() && noCarry();
   const balance = getBalance();
-  if (balance !== null && ym === currentMonth()) {
+  if (balance !== null && ym === currentMonth() && !p.first) {
     let passed = 0;
     for (const e of occurrences(...monthPeriod(ym))) if (e.due <= today) passed += signed(e);
     p.carry = { balance, pending: pendingDebits(), passed, total: balance + pendingDebits() - passed };
@@ -3075,6 +3101,7 @@ function bilanSheet() {
     </div>
     ${others}
     <p class="hint">Revenus du mois moins toutes ses dépenses (passées et prévues). Positif : le mois rapporte plus qu’il ne coûte.</p>
+    ${p.first ? `<h4 class="calc-title">Report du mois dernier</h4><p class="hint">${FIRST_MONTH_INFO}</p>` : ''}
     ${c ? `<h4 class="calc-title">Report du mois dernier</h4>
     <div class="calc">
       ${line('Solde actuel', c.balance, '--text', false, true)}
@@ -3592,6 +3619,14 @@ function renderAccount() {
     </select>
     <p class="hint">${monthLabel(currentMonth())} : ${(periodText(currentMonth()) || 'Du 1er au dernier jour du mois').replace('Du', 'du')}.
       Le mois porte le nom de celui où il a le plus de jours.</p>
+    <label class="field" for="first-month">Premier mois dans Kompte</label>
+    <select class="input" id="first-month">
+      <option value="" ${firstMonth() ? '' : 'selected'}>Pas réglé</option>
+      ${Array.from({ length: 36 }, (_, i) => monthShift(`${currentMonth()}-01`, -i).slice(0, 7)).map((m) =>
+        `<option value="${m}" ${m === firstMonth() ? 'selected' : ''}>${monthLabel(m)}</option>`).join('')}
+    </select>
+    <p class="hint">Ce mois-là, pas de « Report du mois dernier » : le mois d’avant n’a pas été saisi, le report serait faux
+      (et le plafond des budgets ne le compte pas).</p>
     <label class="field" for="card-cutoff">Carte à débit différé</label>
     <select class="input" id="card-enabled">
       <option value="0" ${card.enabled ? '' : 'selected'}>Pas de carte à débit différé</option>
@@ -4287,6 +4322,8 @@ document.addEventListener('click', async (event) => {
   }
   if (t.closest('#upcoming')) { upcomingSheet(); return; }
   if (t.closest('#incomes')) { incomeSheet(); return; }
+  if (t.closest('#bilan-i')) { const pop = $('#bilan-info'); if (pop) pop.hidden = !pop.hidden; return; }
+  if (t.closest('#bilan-info')) { t.closest('#bilan-info').hidden = true; return; }
   if (t.closest('#bilan')) { bilanSheet(); return; }
   if (t.closest('#spending')) { spendingSheet(true); return; }
   const pieMode = t.closest('[data-pie-mode]');
@@ -4443,6 +4480,19 @@ document.addEventListener('change', async (event) => {
       toast('Enregistrement impossible : réessaie.');
     }
     render();
+    return;
+  }
+  if (event.target.id === 'first-month') {
+    const value = { ...(state.all.kv.first_month || {}) };
+    if (event.target.value) value[state.compte] = event.target.value; else delete value[state.compte];
+    state.all.kv.first_month = value;
+    render();
+    try {
+      await check(sb.from('kv_settings').upsert({ key: 'first_month', value }, { onConflict: 'user_id,key' }));
+    } catch (e) {
+      toast('Enregistrement impossible : réessaie.');
+      refresh(true);
+    }
     return;
   }
   if (event.target.id !== 'month-start') return;

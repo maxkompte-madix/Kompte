@@ -725,3 +725,10 @@ textarea.input { resize: vertical; font: inherit; font-size: 16px; line-height: 
 .cash-split.over b { color: var(--red); }
 .cash-row { opacity: .85; }
 .muted-s { font-size: 12px; font-weight: 400; color: var(--muted); }
+/* Bulle « i » d'une case (Bilan du mois) et son explication, toute la largeur sous la case. */
+.metric.has-info { position: relative; padding-right: 34px; }
+.info-dot { position: absolute; top: 8px; right: 8px; width: 20px; height: 20px; border-radius: 50%; background: var(--input);
+  color: var(--muted); font: 700 12px/20px Georgia, serif; font-style: italic; text-align: center; }
+.info-pop { grid-column: 1 / -1; margin: 0; background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
+  padding: 10px 12px; color: var(--muted); font-size: 12px; line-height: 1.45; }
+.info-pop b { color: var(--text); }
