@@ -647,13 +647,14 @@ function pendingByDate() {
 function pendingDebits() { return pendingByDate().reduce((sum, [, v]) => sum + v, 0); }
 
 /** Argent réellement disponible jusqu'à la fin de la période en cours :
-    solde − achats pas encore prélevés − dépenses prévues d'ici là. */
+    solde − dépenses qui sortiront du compte d'ici là (prélèvements carte compris). Un achat carte prélevé après
+    la fin de la période compte dans le mois de son prélèvement, pas dans celui-ci (= available_money du PC). */
 function rawAvailable(balance) {
   const tomorrow = addDays(todayIso(), 1);
   const periodEnd = monthPeriod(currentMonth())[1];
   let planned = 0;
-  for (const e of occurrences(tomorrow, periodEnd)) if (e.row.kind === 'Dépense') planned += e.amount;
-  return [balance + pendingDebits() - planned, addDays(periodEnd, -1)];
+  for (const e of balanceEvents(tomorrow, periodEnd)) if (e.row.kind === 'Dépense') planned += e.amount;
+  return [balance - planned, addDays(periodEnd, -1)];
 }
 /** Disponible moins le coussin, qui ne le fait jamais passer sous zéro (voir cushionKept). */
 function availableMoney(balance) {
@@ -747,14 +748,17 @@ function roundupReminder(pocket) {
   return !!pocket && todayIso() >= addDays(monthPeriod(currentMonth())[1], -ROUNDUP_REMIND_DAYS);
 }
 
-/** Ce qui restait à la fin du mois dernier : l'argent réel d'aujourd'hui (solde − achats pas encore prélevés)
-    moins les opérations du mois en cours déjà passées. null pendant le premier mois dans Kompte (= carry_over du PC). */
+/** Opérations du mois en cours déjà sorties du compte (ou reçues) : somme signée, par date de prélèvement. */
+function passedThisMonth() {
+  let passed = 0;
+  for (const e of balanceEvents(monthPeriod(currentMonth())[0], addDays(todayIso(), 1))) passed += signed(e);
+  return passed;
+}
+/** Ce qui restait à la fin du mois dernier = le solde du compte la veille du début du mois : solde actuel moins
+    les opérations du mois déjà prélevées. null pendant le premier mois dans Kompte (= carry_over du PC). */
 function carryOver(balance) {
   if (noCarry()) return null;
-  const today = todayIso();
-  let passed = 0;
-  for (const e of occurrences(...monthPeriod(currentMonth()))) if (e.due <= today) passed += signed(e);
-  return balance + pendingDebits() - passed;
+  return balance - passedThisMonth();
 }
 
 /** Case « C'est l'arrondi que voilà ! » (accueil et Mon mois) ; rien si l'arrondi n'est pas activé. */
@@ -2096,9 +2100,10 @@ function noCarry() {
 // Bulle « i » de la case Bilan du mois (même texte que BILAN_INFO du PC, au nom du menu près).
 const BILAN_INFO = `<b>Bilan du mois</b><br>Revenus du mois − toutes ses dépenses (passées et à venir).
   Positif : le mois rapporte plus qu’il ne coûte.<br><br>
-  <b>Report du mois dernier</b><br>Ce qui restait la veille du début du mois : solde actuel − achats carte pas encore
-  prélevés − opérations du mois déjà passées. Pour information : jamais ajouté au disponible.<br>
+  <b>Report du mois dernier</b><br>Ce qui restait la veille du début du mois : solde actuel − opérations du mois
+  déjà sorties du compte. Pour information : jamais ajouté au disponible.<br>
   Report + bilan = ce qui restera à la fin du mois.<br><br>
+  <b>Carte à débit différé</b><br>Un achat carte compte dans le mois de son prélèvement.<br><br>
   Détail du calcul : touche la case.`;
 const FIRST_MONTH_INFO = `Premier mois dans Kompte : pas de report. À régler seulement si le début de ce mois n’a pas été saisi
   (le report serait faux). Tout est saisi depuis le premier jour du mois ? Laisser « Pas réglé » : le report est juste et lu
@@ -2116,8 +2121,9 @@ function periodHint() {
   return text ? `<p class="hint" style="text-align:center;margin:-6px 0 10px">${text}</p>` : '';
 }
 
+/** Opérations du mois : un achat carte à débit différé compte dans le mois de son prélèvement (= summary du PC). */
 function summary(ym) {
-  const events = occurrences(...monthPeriod(ym));
+  const events = balanceEvents(...monthPeriod(ym));
   const today = todayIso();
   let income = 0, out = 0, paid = 0;
   for (const e of events) {
@@ -2897,8 +2903,8 @@ function renderDashboard() {
   const { income, out, paid, events } = summary(ym);
   const isToday = ym === currentMonth();
   const today = todayIso();
-  // Seulement ce qui a déjà eu lieu, les 10 plus récentes (le détail est dans Opérations).
-  const done = events.filter((e) => e.due <= today).slice(0, 10);
+  // Seulement ce qui a déjà eu lieu, les 10 plus récentes, à leur date d'achat (le détail est dans Opérations).
+  const done = occurrences(...monthPeriod(ym)).filter((e) => e.due <= today).slice(0, 10);
   const metric = (label, value, color, id = '') =>
     `<${id ? `button type="button" id="${id}"` : 'div'} class="metric"><small>${label}</small><b style="color:${color}">${euro(value)}</b></${id ? 'button' : 'div'}>`;
   view.innerHTML = `
@@ -2910,7 +2916,7 @@ function renderDashboard() {
         `<span class="pending">À prélever le ${frDate(d)} : ${euro(-v)}</span>`).join('') : ''}
       ${free ? `<span class="free">Disponible jusqu’au ${+free[1].slice(8, 10)} ${MONTHS[+free[1].slice(5, 7) - 1]}
         <b style="color:var(${free[0] >= 0 ? '--green' : '--red'})">${euro(free[0])}</b>
-        <em>solde − achats pas encore prélevés − dépenses prévues d’ici là${cushionNow() ? ` − coussin mis de côté (${euro(cushionNow())})` : ''}${roundupNow() ? ` − arrondis mis de côté (${euro(roundupNow())})` : ''}</em></span>` : ''}
+        <em>solde − dépenses et prélèvements carte d’ici là${cushionNow() ? ` − coussin mis de côté (${euro(cushionNow())})` : ''}${roundupNow() ? ` − arrondis mis de côté (${euro(roundupNow())})` : ''}</em></span>` : ''}
     </button>
     <div class="monthbar">
       <button type="button" class="icon-btn" data-month="-1" aria-label="Mois précédent">‹</button>
@@ -3055,9 +3061,8 @@ function bilanParts(ym) {
   p.first = ym === currentMonth() && noCarry();
   const balance = getBalance();
   if (balance !== null && ym === currentMonth() && !p.first) {
-    let passed = 0;
-    for (const e of occurrences(...monthPeriod(ym))) if (e.due <= today) passed += signed(e);
-    p.carry = { balance, pending: pendingDebits(), passed, total: balance + pendingDebits() - passed };
+    const passed = passedThisMonth();
+    p.carry = { balance, passed, total: balance - passed };
   }
   return p;
 }
@@ -3107,12 +3112,11 @@ function bilanSheet() {
     ${c ? `<h4 class="calc-title">Report du mois dernier</h4>
     <div class="calc">
       ${line('Solde actuel', c.balance, '--text', false, true)}
-      ${c.pending ? line('Achats carte pas encore prélevés', c.pending, '--red') : ''}
-      ${line('Opérations déjà passées ce mois-ci (retirées)', -c.passed, c.passed >= 0 ? '--red' : '--green')}
+      ${line('Déjà sorti du compte ce mois-ci (retiré)', -c.passed, c.passed >= 0 ? '--red' : '--green')}
       ${line('Report du mois dernier', c.total, c.total >= 0 ? '--green' : '--red', true)}
     </div>
-    <p class="hint">Ce qui restait au début du mois : l’argent réel d’aujourd’hui, sans ce qui s’est déjà passé ce mois-ci.
-      Affiché pour information, il n’est pas ajouté au disponible.</p>` : ''}
+    <p class="hint">Ce qui restait au début du mois : le solde du compte la veille, sans ce qui en est déjà sorti
+      ce mois-ci. Affiché pour information, il n’est pas ajouté au disponible.</p>` : ''}
     <p class="error-text"></p>
     <div class="actions"><button type="button" class="primary" data-close>Fermer</button></div>`, async () => {});
 }
