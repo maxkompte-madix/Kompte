@@ -776,6 +776,72 @@ function carryParts(balance) {
   for (const e of stillToCome()) if (monthOf(e.row, e.due) < currentMonth()) older += signed(e);
   return { balance, passed, older, total: balance - passed + older };
 }
+/** Compte en banque une fois prélevés tous les achats carte déjà faits (tous relevés) : {amount, date du dernier
+    prélèvement}, ou null s'il n'y a rien en attente (= bank_after_card du PC). */
+function bankAfterCard(balance) {
+  const pending = pendingByDate().filter(([, v]) => v);
+  if (balance === null || !pending.length) return null;
+  return { amount: balance + pending.reduce((t, [, v]) => t + v, 0), date: pending[pending.length - 1][0] };
+}
+/** Aperçu du mois suivant dès qu'un achat carte fait déjà partie de ses dépenses (= next_month_preview du PC) :
+    fin du mois en cours prévue + revenus du mois suivant − ses dépenses connues (achats carte déjà faits compris). */
+function nextMonthPreview(balance) {
+  if (balance === null || !deferredActive()) return null;
+  const today = todayIso();
+  const ym = nextMonth(currentMonth());
+  const { income, out, events } = summary(ym);
+  const cardEvents = events.filter((e) => isCard(e.row) && e.due <= today);
+  if (!cardEvents.length) return null;
+  const p = { ym, end: balance, fixedIn: 0, otherIn: 0, card: 0, fixedOut: 0, otherOut: 0, cardEvents, debit: '' };
+  for (const e of stillToCome()) p.end += signed(e);
+  for (const e of events) {
+    if (e.row.kind === 'Revenu') { if (e.row.id < 0) p.fixedIn += e.amount; else p.otherIn += e.amount; }
+    else if (isCard(e.row) && e.due <= today) p.card += e.amount;
+    else if (e.row.id < 0) p.fixedOut += e.amount;
+    else p.otherOut += e.amount;
+  }
+  for (const e of cardEvents) { const d = debitDate(e.row, e.due); if (d > p.debit) p.debit = d; }
+  p.rest = p.end + income - out;
+  return p;
+}
+function nextMonthCard(balance) {
+  const p = nextMonthPreview(balance);
+  if (!p) return '';
+  const start = monthPeriod(p.ym)[0];
+  return `<button type="button" class="roundup-card next-card" id="next-month">
+      <span class="ru-ico">📅</span>
+      <span class="ru-body"><small>${monthLabel(p.ym)} · dès le ${+start.slice(8, 10)} ${MONTHS[+start.slice(5, 7) - 1]}</small>
+        <b style="color:var(${p.rest >= 0 ? '--green' : '--red'})">Il te restera ${euro(p.rest)}</b>
+        <em>Déjà engagé sur la carte : ${euro(p.card)} · touche pour le détail</em></span>
+    </button>`;
+}
+function nextMonthSheet() {
+  const p = nextMonthPreview(getBalance());
+  if (!p) return;
+  const line = (label, value, color, strong = false) => `<div class="calc-line${strong ? ' total' : ''}"><span>${label}</span>
+      <b style="color:var(${color})">${value > 0 && !strong ? '+' : value < 0 ? '−' : ''}${euro(Math.abs(value))}</b></div>`;
+  const last = addDays(monthPeriod(currentMonth())[1], -1);
+  openSheet(`
+    <h3>${monthLabel(p.ym)} : ce qu’il te restera</h3>
+    ${(() => { const t = periodText(p.ym); return t ? `<p class="hint" style="text-align:center;margin-top:0">${t}</p>` : ''; })()}
+    <div class="calc">
+      <div class="calc-line"><span>Fin du mois en cours (le ${frDate(last)}, tout payé)</span>
+        <b style="color:var(--text)">${euro(p.end)}</b></div>
+      ${line('Revenus fixes', p.fixedIn, '--green')}
+      ${p.otherIn ? line('Autres revenus prévus', p.otherIn, '--green') : ''}
+      ${line(`Achats carte déjà faits (prélevés le ${frDate(p.debit)})`, -p.card, '--red')}
+      ${line('Dépenses fixes', -p.fixedOut, '--red')}
+      ${p.otherOut ? line('Autres dépenses prévues', -p.otherOut, '--red') : ''}
+      ${line('Il te restera', p.rest, p.rest >= 0 ? '--green' : '--red', true)}
+    </div>
+    <p class="hint">Avant les dépenses de tous les jours de ce mois-là (budgets), le coussin et les arrondis.
+      Chaque achat carte fait d’ici là le fait baisser.</p>
+    <details class="calc-more"><summary>Voir les ${p.cardEvents.length} achat${p.cardEvents.length > 1 ? 's' : ''} carte</summary>
+      <div class="list">${[...p.cardEvents].sort(byDate).map(eventRow).join('')}</div></details>
+    <p class="error-text"></p>
+    <div class="actions"><button type="button" class="primary" data-close>Fermer</button></div>`, async () => {});
+}
+
 /** Ce qui restait à la fin du mois dernier, une fois payé tout ce qui le concerne. null pendant le premier mois
     dans Kompte (= carry_over du PC). */
 function carryOver(balance) {
@@ -2399,7 +2465,7 @@ function renderMenu() {
     : free
       ? `<button type="button" class="hero menu-hero" data-go="dashboard"><small>IL TE RESTE JUSQU’AU ${+free[1].slice(8, 10)} ${MONTHS[+free[1].slice(5, 7) - 1].toUpperCase()}</small>
           <strong style="color:var(${free[0] >= 0 ? '--green' : '--red'})">${euro(free[0])}</strong>
-          <span>Solde en banque : ${euro(balance)} · touche pour le détail ›</span></button>`
+          <span>Solde en banque : ${euro(balance)}${bankAfterCard(balance) ? ` · après les prélèvements carte : ${euro(bankAfterCard(balance).amount)}` : ''} · touche pour le détail ›</span></button>`
       : `<button type="button" class="hero menu-hero" data-go="dashboard"><small>SOLDE ACTUEL</small>
           <strong>${euro(balance)}</strong><span>Touche pour le détail du mois ›</span></button>`;
   const notes = state.data.notes.length;
@@ -2419,6 +2485,7 @@ function renderMenu() {
     <div class="menu-head">${logoImg(state.compte, 'big')}<p class="menu-hello">${hello} !<small>${esc(compteName(state.compte))}</small></p>${SCENE[theme] ? SCENE[theme]() : ''}</div>
     ${joke}
     ${summaryCard}
+    ${nextMonthCard(balance)}
     ${roundupCard()}
     <button type="button" class="primary wide menu-add" id="m-add">＋ Ajouter une dépense ou une rentrée</button>
     <div class="tiles">${tiles.map(([go, icon, title, text, color]) => `
@@ -2919,6 +2986,7 @@ function renderDashboard() {
   const balance = getBalance();
   const ref = balanceReference();
   const free = balance === null ? null : availableMoney(balance);
+  const bank = bankAfterCard(balance);
   const carry = balance === null || state.selected !== currentMonth() ? null : carryOver(balance);
   const first = state.selected === currentMonth() && noCarry();
   const ym = state.selected;
@@ -2939,7 +3007,11 @@ function renderDashboard() {
       ${free ? `<span class="free">Disponible jusqu’au ${+free[1].slice(8, 10)} ${MONTHS[+free[1].slice(5, 7) - 1]}
         <b style="color:var(${free[0] >= 0 ? '--green' : '--red'})">${euro(free[0])}</b>
         <em>solde − dépenses du mois pas encore passées (prélèvement carte du mois compris)${cushionNow() ? ` − coussin mis de côté (${euro(cushionNow())})` : ''}${roundupNow() ? ` − arrondis mis de côté (${euro(roundupNow())})` : ''}</em></span>` : ''}
+      ${bank ? `<span class="free">Compte en banque après les prélèvements carte
+        <b style="color:var(${bank.amount >= 0 ? '--green' : '--red'})">${euro(bank.amount)}</b>
+        <em>le ${frDate(bank.date)}, une fois prélevés tous les achats carte déjà faits</em></span>` : ''}
     </button>
+    ${isToday ? nextMonthCard(balance) : ''}
     <div class="monthbar">
       <button type="button" class="icon-btn" data-month="-1" aria-label="Mois précédent">‹</button>
       <span class="label">${monthLabel(ym)}</span>
@@ -4354,6 +4426,7 @@ document.addEventListener('click', async (event) => {
   if (t.closest('#bilan-i')) { const pop = $('#bilan-info'); if (pop) pop.hidden = !pop.hidden; return; }
   if (t.closest('#bilan-info')) { t.closest('#bilan-info').hidden = true; return; }
   if (t.closest('#bilan')) { bilanSheet(); return; }
+  if (t.closest('#next-month')) { nextMonthSheet(); return; }
   if (t.closest('#spending')) { spendingSheet(true); return; }
   const pieMode = t.closest('[data-pie-mode]');
   if (pieMode) { spendingSheet(pieMode.dataset.pieMode === 'paid', pieView.cat); return; }
