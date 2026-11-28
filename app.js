@@ -668,6 +668,18 @@ function stillToCome() {
   return occurrences(from, monthPeriod(ym)[1])
     .filter((e) => debitDate(e.row, e.due) >= tomorrow && monthOf(e.row, e.due) <= ym);
 }
+/** Revenus du mois en cours pas encore reçus : pas comptés dans le disponible, affichés à part ({total, events}). */
+function stillToReceive() {
+  const events = stillToCome().filter((e) => e.row.kind === 'Revenu').sort((a, b) => (a.due < b.due ? -1 : 1));
+  return { total: events.reduce((t, e) => t + e.amount, 0), events };
+}
+/** Ligne sous le disponible : « + 600,67 € à recevoir (Loyer, le 1er décembre) : pas compté, attend d'être reçu ». */
+function toReceiveLine() {
+  const { total, events } = stillToReceive();
+  if (!total) return '';
+  const what = events.length === 1 ? `${esc(events[0].row.title)}, le ${frDate(events[0].due)}` : `${events.length} revenus, dès le ${frDate(events[0].due)}`;
+  return `<em class="to-receive">+ ${euro(total)} à recevoir (${what}) : pas compté, attend d’être reçu</em>`;
+}
 /** Argent réellement disponible jusqu'à la fin de la période en cours : solde − dépenses du mois pas encore passées
     (prélèvement carte du mois compris) (= available_money du PC). */
 function rawAvailable(balance) {
@@ -2465,7 +2477,7 @@ function renderMenu() {
     : free
       ? `<button type="button" class="hero menu-hero" data-go="dashboard"><small>IL TE RESTE JUSQU’AU ${+free[1].slice(8, 10)} ${MONTHS[+free[1].slice(5, 7) - 1].toUpperCase()}</small>
           <strong style="color:var(${free[0] >= 0 ? '--green' : '--red'})">${euro(free[0])}</strong>
-          <span>Solde en banque : ${euro(balance)}${bankAfterCard(balance) ? ` · après les prélèvements carte : ${euro(bankAfterCard(balance).amount)}` : ''} · touche pour le détail ›</span></button>`
+          <span>${stillToReceive().total ? `+ ${euro(stillToReceive().total)} à recevoir, pas compté · ` : ''}Solde en banque : ${euro(balance)}${bankAfterCard(balance) ? ` · après les prélèvements carte : ${euro(bankAfterCard(balance).amount)}` : ''} · touche pour le détail ›</span></button>`
       : `<button type="button" class="hero menu-hero" data-go="dashboard"><small>SOLDE ACTUEL</small>
           <strong>${euro(balance)}</strong><span>Touche pour le détail du mois ›</span></button>`;
   const notes = state.data.notes.length;
@@ -3006,7 +3018,7 @@ function renderDashboard() {
         `<span class="pending">À prélever le ${frDate(d)} : ${euro(-v)}</span>`).join('') : ''}
       ${free ? `<span class="free">Disponible jusqu’au ${+free[1].slice(8, 10)} ${MONTHS[+free[1].slice(5, 7) - 1]}
         <b style="color:var(${free[0] >= 0 ? '--green' : '--red'})">${euro(free[0])}</b>
-        <em>solde − dépenses du mois pas encore passées (prélèvement carte du mois compris)${cushionNow() ? ` − coussin mis de côté (${euro(cushionNow())})` : ''}${roundupNow() ? ` − arrondis mis de côté (${euro(roundupNow())})` : ''}</em></span>` : ''}
+        <em>solde − dépenses du mois pas encore passées (prélèvement carte du mois compris)${cushionNow() ? ` − coussin mis de côté (${euro(cushionNow())})` : ''}${roundupNow() ? ` − arrondis mis de côté (${euro(roundupNow())})` : ''}</em>${toReceiveLine()}</span>` : ''}
       ${bank ? `<span class="free">Compte en banque après les prélèvements carte
         <b style="color:var(${bank.amount >= 0 ? '--green' : '--red'})">${euro(bank.amount)}</b>
         <em>le ${frDate(bank.date)}, une fois prélevés tous les achats carte déjà faits</em></span>` : ''}
